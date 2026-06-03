@@ -27,11 +27,13 @@ from deploy.utils.dynamo_deployment import cleanup_remaining_deployments
 from dynamo.profiler.interpolation import run_interpolation
 from dynamo.profiler.rapid import run_rapid
 from dynamo.profiler.thorough import run_thorough
-from dynamo.profiler.utils.config_modifiers import CONFIG_MODIFIERS
 from dynamo.profiler.utils.config_modifiers.parallelization_mapping import (
     PickedParallelConfig,
 )
-from dynamo.profiler.utils.config_modifiers.protocol import apply_dgd_overrides
+from dynamo.profiler.utils.config_modifiers.protocol import (
+    apply_dgd_overrides,
+    auto_inject_trust_remote_code,
+)
 from dynamo.profiler.utils.defaults import SearchStrategy
 from dynamo.profiler.utils.dgd_generation import (
     assemble_final_config,
@@ -52,6 +54,7 @@ from dynamo.profiler.utils.profile_common import (
     determine_picking_mode,
     get_profiling_job_tolerations,
     inject_tolerations_into_dgd,
+    is_mocker_enabled,
     needs_profile_data,
     picked_config_from_row,
     resolve_model_path,
@@ -74,29 +77,6 @@ def _apply_tolerations_to_final_config(final_config: Any, tolerations: list) -> 
         result[-1] = inject_tolerations_into_dgd(result[-1], tolerations)
         return result
     return inject_tolerations_into_dgd(final_config, tolerations)
-
-
-def _apply_model_runtime_constraints_to_final_config(
-    final_config: Any,
-    backend: str,
-    model_name_or_path: str,
-) -> Any:
-    if backend != "vllm" or not final_config:
-        return final_config
-
-    config_modifier = CONFIG_MODIFIERS[backend]
-    if not hasattr(config_modifier, "apply_model_runtime_constraints"):
-        return final_config
-
-    if isinstance(final_config, list):
-        final_config[-1] = config_modifier.apply_model_runtime_constraints(
-            final_config[-1], model_name_or_path
-        )
-    elif isinstance(final_config, dict):
-        final_config = config_modifier.apply_model_runtime_constraints(
-            final_config, model_name_or_path
-        )
-    return final_config
 
 
 def _check_auto_backend_support(model: str, system: str) -> bool:
@@ -448,6 +428,15 @@ async def run_profile(
                 len(job_tolerations),
             )
 
+        # Auto-inject --trust-remote-code into the selected disaggregated config
+        # used for interpolation sweeps. Must run after DGD overrides and
+        # tolerations; uses per-service --model extraction so override-swapped
+        # models are detected correctly.
+        if dgd_config:
+            auto_inject_trust_remote_code(
+                dgd_config, resolve_model_path(dgdr), resolved_backend
+            )
+
         # ---------------------------------------------------------------
         # Interpolation curves — only needed when something consumes the
         # per-engine performance data on disk (thorough-mode planner or
@@ -561,11 +550,23 @@ async def run_profile(
                 final_config = apply_dgd_overrides(final_config, dgdr.overrides.dgd)
             logger.info("Applied DGD overrides to the final config.")
 
-        final_config = _apply_model_runtime_constraints_to_final_config(
-            final_config,
-            resolved_backend,
-            resolve_model_path(dgdr),
-        )
+        # Auto-inject --trust-remote-code for HF models that ship custom
+        # Python (`auto_map` in config.json). Runs after user overrides so
+        # an explicit override wins and we don't duplicate the flag.
+        # The injector uses per-service --model extraction so an
+        # override-swapped model path is detected correctly; resolve_model_path
+        # is used only as a fallback.
+        # Skip when mocker is enabled: mocker replaces the DGD with
+        # ``python -m dynamo.mocker`` workers whose argparse does not
+        # accept ``--trust-remote-code``.
+        if final_config and not is_mocker_enabled(dgdr):
+            trc_target = (
+                final_config[-1] if isinstance(final_config, list) else final_config
+            )
+            if isinstance(trc_target, dict):
+                auto_inject_trust_remote_code(
+                    trc_target, resolve_model_path(dgdr), resolved_backend
+                )
 
         # Propagate profiling-job tolerations to the final DGD (covers any
         # services added by assemble_final_config, e.g. Planner).
