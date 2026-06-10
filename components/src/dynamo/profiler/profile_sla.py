@@ -556,10 +556,10 @@ async def run_profile(
         # The injector uses per-service --model extraction so an
         # override-swapped model path is detected correctly; resolve_model_path
         # is used only as a fallback.
-        # Skip when mocker is enabled: mocker replaces the DGD with
-        # ``python -m dynamo.mocker`` workers whose argparse does not
-        # accept ``--trust-remote-code``.
-        if final_config and not is_mocker_enabled(dgdr):
+    # Skip when mocker is enabled: mocker replaces the DGD with
+    # ``python -m dynamo.mocker`` workers whose argparse does not
+    # accept ``--trust-remote-code``.
+    if final_config and not is_mocker_enabled(dgdr):
             trc_target = (
                 final_config[-1] if isinstance(final_config, list) else final_config
             )
