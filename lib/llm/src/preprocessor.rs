@@ -84,6 +84,19 @@ pub use crate::protocols::common::preprocessor::PreprocessedEmbeddingRequest;
 
 use crate::protocols::common::llm_backend::EmbeddingsEngineOutput;
 
+fn routing_priorities(
+    hints: Option<&crate::protocols::openai::nvext::AgentHints>,
+) -> (Option<f64>, Option<u32>, Option<i32>) {
+    let priority_jump = hints.and_then(|h| {
+        h.priority
+            .map(|priority| priority.max(0) as f64)
+            .or(h.latency_sensitivity)
+    });
+    let strict_priority = hints.and_then(|h| h.strict_priority);
+    let priority = hints.and_then(|h| h.priority);
+    (priority_jump, strict_priority, priority)
+}
+
 /// Encode a slice of `f32` values as a base64 string per the OpenAI
 /// `encoding_format=base64` spec: the raw little-endian byte
 /// representation of each `f32` is concatenated and the resulting byte
@@ -309,6 +322,12 @@ impl OpenAIPreprocessor {
             }
             if let Some(ref salt) = nvext.cache_salt {
                 nvext_passthrough.insert("cache_salt".to_string(), serde_json::json!(salt));
+            }
+            if let Some(ref metadata_upload) = nvext.metadata_upload {
+                nvext_passthrough.insert(
+                    "metadata_upload".to_string(),
+                    serde_json::json!(metadata_upload),
+                );
             }
             if nvext.token_data.is_some() {
                 nvext_passthrough.insert("token_in".to_string(), serde_json::Value::Bool(true));
@@ -816,6 +835,7 @@ impl OpenAIPreprocessor {
         if let Some(nvext) = request.nvext() {
             // Build routing hints from nvext fields
             let hints = nvext.agent_hints.as_ref();
+            let (priority_jump, strict_priority, priority) = routing_priorities(hints);
             builder.request_timestamp_ms(nvext.request_timestamp_ms);
             builder.agent_context(nvext.agent_context.clone());
             let routing = RoutingHints {
@@ -825,12 +845,9 @@ impl OpenAIPreprocessor {
                 dp_rank: nvext.dp_rank,
                 prefill_dp_rank: nvext.prefill_dp_rank,
                 expected_output_tokens: hints.and_then(|h| h.osl),
-                priority_jump: hints.and_then(|h| {
-                    h.priority
-                        .map(|priority| priority.max(0) as f64)
-                        .or(h.latency_sensitivity)
-                }),
-                priority: hints.and_then(|h| h.priority),
+                priority_jump,
+                strict_priority,
+                priority,
                 lora_name,
                 allowed_worker_ids: None,
                 session_control: nvext.session_control.clone(),
@@ -1956,7 +1973,7 @@ impl OpenAIPreprocessor {
         generator: Box<dyn DeltaGeneratorExt<Resp>>,
         context: Arc<dyn AsyncEngineContext>,
         trace_tokens_enabled: bool,
-        trace_finish_reason_metadata: Option<crate::agents::trace::SharedFinishReasonMetadata>,
+        trace_finish_reason_metadata: Option<crate::request_trace::SharedFinishReasonMetadata>,
     ) -> impl Stream<Item = Annotated<Resp>> + Send
     where
         S: Stream<Item = Annotated<BackendOutput>> + Send + 'static,
@@ -1975,7 +1992,7 @@ impl OpenAIPreprocessor {
             usage_chunk_sent: bool,
             finished: bool,
             trace_tokens_enabled: bool,
-            trace_finish_reason_metadata: Option<crate::agents::trace::SharedFinishReasonMetadata>,
+            trace_finish_reason_metadata: Option<crate::request_trace::SharedFinishReasonMetadata>,
         }
 
         let state = State {
@@ -2037,7 +2054,7 @@ impl OpenAIPreprocessor {
 
                         let isl = inner.response_generator.get_isl().map(|isl| isl as usize);
 
-                        crate::agents::trace::record_backend_finish_reason_metadata(
+                        crate::request_trace::record_backend_finish_reason_metadata(
                             inner.trace_finish_reason_metadata.as_ref(),
                             backend_output.index,
                             backend_output.finish_reason.as_ref(),
@@ -2098,7 +2115,7 @@ impl OpenAIPreprocessor {
                         detokenize_count: tracker.as_ref().map(|t| t.detokenize_count()),
                     };
                     if inner.trace_tokens_enabled {
-                        crate::agents::trace::record_llm_metric_tokens(
+                        crate::request_trace::record_llm_metric_tokens(
                             tracker.as_deref(),
                             isl,
                             current_osl,
@@ -2181,7 +2198,7 @@ impl OpenAIPreprocessor {
                             detokenize_count: tracker.as_ref().map(|t| t.detokenize_count()),
                         };
                         if inner.trace_tokens_enabled {
-                            crate::agents::trace::record_llm_metric_tokens(
+                            crate::request_trace::record_llm_metric_tokens(
                                 tracker.as_deref(),
                                 Some(usage.prompt_tokens as usize),
                                 usage.completion_tokens as usize,
@@ -3203,6 +3220,21 @@ mod strip_tests {
 mod tests {
     use super::*;
 
+    #[test]
+    fn routing_priorities_keep_strict_tier_independent() {
+        let hints = crate::protocols::openai::nvext::AgentHints {
+            priority: Some(-3),
+            strict_priority: Some(7),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            routing_priorities(Some(&hints)),
+            (Some(0.0), Some(7), Some(-3))
+        );
+        assert_eq!(routing_priorities(None), (None, None, None));
+    }
+
     /// PRE.1 — `skip_special_tokens` default. See `lib/llm/PREPROCESSOR_CASES.md`.
     #[test]
     fn test_parser_requires_special_tokens() {
@@ -3319,7 +3351,10 @@ mod tests {
             "bad_words_token_ids": [[12, 13]],
             "nvext": {
                 "cache_salt": "step_7",
-                "extra_fields": ["completion_token_ids"]
+                "extra_fields": ["completion_token_ids"],
+                "metadata_upload": {
+                    "url": "s3://bucket/root/rollouts"
+                }
             }
         }))
         .unwrap();
@@ -3330,6 +3365,12 @@ mod tests {
         assert_eq!(
             extra_args["nvext"]["extra_fields"],
             serde_json::json!(["completion_token_ids"])
+        );
+        assert_eq!(
+            extra_args["nvext"]["metadata_upload"],
+            serde_json::json!({
+                "url": "s3://bucket/root/rollouts"
+            })
         );
         assert_eq!(extra_args["sampling_options"]["detokenize"], false);
         assert_eq!(

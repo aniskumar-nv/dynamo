@@ -472,10 +472,7 @@ impl DisaggRuntime {
     /// Pick the next logical timestamp from arrivals, worker completions, or decode handoffs.
     fn next_timestamp(&mut self) -> Option<f64> {
         let next_event_ms = self.events.peek().map(|event| event.at_ms);
-        let next = choose_next_timestamp(
-            self.admission.next_ready_time_ms(self.cluster_in_flight()),
-            next_event_ms,
-        );
+        let next = choose_next_timestamp(self.admission.next_ready_time_ms(), next_event_ms);
         #[cfg(feature = "kvbm-offload")]
         {
             let next_offload = choose_next_timestamp(
@@ -1309,6 +1306,7 @@ mod tests {
             uuid: Some(Uuid::from_u128(uuid)),
             dp_rank: 0,
             arrival_timestamp_ms: Some(arrival_ms),
+            ..Default::default()
         }
     }
 
@@ -1325,12 +1323,14 @@ mod tests {
                             max_output_tokens: 2,
                             hash_ids: vec![11],
                             delay_after_previous_ms: 0.0,
+                            ..Default::default()
                         },
                         TurnTrace {
                             input_length: 192,
                             max_output_tokens: 2,
                             hash_ids: vec![21, 22, 23],
                             delay_after_previous_ms: 10.0,
+                            ..Default::default()
                         },
                     ],
                 },
@@ -1342,6 +1342,7 @@ mod tests {
                         max_output_tokens: 2,
                         hash_ids: vec![31, 32],
                         delay_after_previous_ms: 0.0,
+                        ..Default::default()
                     }],
                 },
             ],
@@ -1490,6 +1491,7 @@ mod tests {
                 uuid: Some(Uuid::from_u128(1)),
                 dp_rank: 0,
                 arrival_timestamp_ms: None,
+                ..Default::default()
             },
             DirectRequest {
                 tokens: vec![2; 128],
@@ -1497,6 +1499,7 @@ mod tests {
                 uuid: Some(Uuid::from_u128(2)),
                 dp_rank: 0,
                 arrival_timestamp_ms: None,
+                ..Default::default()
             },
         ];
 
@@ -1743,7 +1746,7 @@ mod tests {
     }
 
     #[test]
-    fn test_concurrency_workload_delayed_follow_up_does_not_bypass_other_ready_sessions() {
+    fn test_concurrency_workload_holds_session_slot_depth_first() {
         let (collector, _) = run_concurrency_workload_collect(
             &disagg_config(),
             multiturn_trace(),
@@ -1763,7 +1766,7 @@ mod tests {
                 .into_iter()
                 .map(|(_, input_length)| input_length)
                 .collect::<Vec<_>>(),
-            vec![64, 128, 192]
+            vec![64, 192, 128]
         );
     }
 }
