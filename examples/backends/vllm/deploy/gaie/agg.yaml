@@ -49,7 +49,7 @@ spec:
           - secretRef:
               name: hf-token-secret
           image: nvcr.io/nvidia/ai-dynamo/epp-image:my-tag
-  - name: VllmDecodeWorker
+  - name: decode
     type: decode
     replicas: 1
     sharedMemorySize: 2Gi

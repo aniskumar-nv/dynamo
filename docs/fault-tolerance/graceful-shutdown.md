@@ -214,7 +214,7 @@ apiVersion: nvidia.com/v1alpha1
 kind: DynamoGraphDeployment
 spec:
   services:
-    VllmWorker:
+    worker:
       extraPodSpec:
         terminationGracePeriodSeconds: 60  # Allow time for request draining
 ```
