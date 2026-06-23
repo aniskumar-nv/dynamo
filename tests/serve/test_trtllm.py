@@ -259,6 +259,8 @@ trtllm_configs = {
             pytest.mark.trtllm,
             pytest.mark.multimodal,
             pytest.mark.nightly,
+            pytest.mark.profiled_vram_gib(15.0),
+            pytest.mark.requested_trtllm_kv_tokens(1056),
         ],
         # Must match the disagg engine configs shipped in disagg_multimodal.sh
         # (engine_configs/qwen3-vl-2b-instruct/{prefill,decode}.yaml). Qwen2-VL-7B
