@@ -448,8 +448,6 @@ async def run_thorough(
             len(decode_candidates),
         )
 
-<<<<<<< HEAD
-=======
     # Auto-inject --trust-remote-code into every candidate DGD.  Must run
     # after DGD overrides (so user overrides win) and tolerations (order
     # doesn't matter, but consistent with profile_sla.py).  Uses
@@ -460,7 +458,6 @@ async def run_thorough(
 
     config_modifier = CONFIG_MODIFIERS[backend]
 
->>>>>>> 6f1ff9a9bc (profiler: address PR review comments on auto trust_remote_code injection)
     # --- Stage 2: Benchmarking ---
     ops.current_phase = ProfilingPhase.SweepingPrefill
     write_profiler_status(
