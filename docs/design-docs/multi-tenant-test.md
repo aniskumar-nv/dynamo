@@ -326,9 +326,9 @@ decision in §8.2–§8.7 traces back to one of these.
 | Power Agent DaemonSet | **Not present** on the cluster | Setup runbook §8.3.B must `helm install` `deploy/helm/charts/power-agent` |
 | `nvidia-dcgm` (hostengine) | **Not present.** Only `nvidia-dcgm-exporter` (embedded DCGM) is deployed. | DCGM live pass §8.6 must deploy a standalone hostengine DS OR have a cluster admin flip GPU Operator `dcgm.enabled=true` |
 | Dynamo CRDs | All present (`dynamographdeployments.nvidia.com`, etc.) | DGD objects from §8.4 can be applied without CRD install |
-| Operator in `kaim-dynamo-system` | **Not present** | Setup runbook §8.3.A must install `kubernetes-operator` chart in that namespace |
+| Operator in `dynamo-power-test` | **Not present** | Setup runbook §8.3.A must install `kubernetes-operator` chart in that namespace |
 | Existing TRTLLM / SGLang DGDs | **None anywhere on the cluster** | TRTLLM + SGLang runtime images unverified — live test scopes to **VLLM-only** (Tier 1/2 retains the multi-framework topology in §2) |
-| Pull secret in `kaim-dynamo-system` | `nvcr-imagepullsecret` covers `nvcr.io` only | DGDs in §8.4 pin to `nvcr.io/nvidia/ai-dynamo/vllm-runtime` tags — no `nvstaging` or `dynamoci.azurecr.io` |
+| Pull secret in `dynamo-power-test` | `nvcr-imagepullsecret` covers `nvcr.io` only | DGDs in §8.4 pin to `nvcr.io/nvidia/ai-dynamo/vllm-runtime` tags — no `nvstaging` or `dynamoci.azurecr.io` |
 | Operator tag with recent pull-success on cluster | `nvcr.io/nvidia/ai-dynamo/kubernetes-operator:1.2.0` (running in `ycha-snapshot-poc`) | Setup runbook pins this exact tag |
 | Power Agent helm chart present in repo | `deploy/helm/charts/power-agent/{Chart.yaml,values.yaml,templates/*}` | NVML default actuator; `--set agent.actuator=dcgm` flips to DCGM; A100 SXM4 safe-default = **280 W** (chart values.yaml comment) |
 
@@ -376,7 +376,7 @@ with `FakeNode`.
 All steps run from a workstation with `kubectl` already pointing at
 `dpp-dev-env` (`$KUBECONFIG = ~/.kube/dynamo-kubeconfig`).
 
-**A. Install Dynamo operator in `kaim-dynamo-system`.**
+**A. Install Dynamo operator in `dynamo-power-test`.**
 
 The cluster has the CRDs installed (verified §8.1) but the operator
 controller-manager isn't running in this namespace, so DGD objects there
@@ -386,14 +386,14 @@ won't reconcile until we install one.
 # Pin the same tag already proven pullable on this cluster
 helm upgrade --install dynamo-platform \
     deploy/helm/charts/platform \
-    --namespace kaim-dynamo-system \
+    --namespace dynamo-power-test \
     --create-namespace \
     --set dynamo-operator.controllerManager.manager.image.tag=1.2.0 \
     --set dynamo-operator.namespaceRestriction.enabled=true \
-    --set dynamo-operator.namespaceRestriction.targetNamespace=kaim-dynamo-system
+    --set dynamo-operator.namespaceRestriction.targetNamespace=dynamo-power-test
 
 # Wait for controller-manager
-kubectl wait deploy -n kaim-dynamo-system \
+kubectl wait deploy -n dynamo-power-test \
     dynamo-platform-dynamo-operator-controller-manager \
     --for=condition=Available --timeout=180s
 ```
@@ -404,7 +404,7 @@ kubectl wait deploy -n kaim-dynamo-system \
 # Pull-secret already exists in namespace (verified §8.1): nvcr-imagepullsecret
 helm upgrade --install power-agent \
     deploy/helm/charts/power-agent \
-    --namespace kaim-dynamo-system \
+    --namespace dynamo-power-test \
     --set image.repository=nvcr.io/nvidia/ai-dynamo/power-agent \
     --set image.tag=v1.2.0 \
     --set "imagePullSecrets[0].name=nvcr-imagepullsecret" \
@@ -413,22 +413,22 @@ helm upgrade --install power-agent \
     --set agent.prometheusPort=9100 \
     --set rbac.namespaceRestricted=true
 
-kubectl rollout status ds -n kaim-dynamo-system power-agent --timeout=180s
+kubectl rollout status ds -n dynamo-power-test power-agent --timeout=180s
 ```
 
-Verification: `kubectl get ds -n kaim-dynamo-system power-agent` shows
+Verification: `kubectl get ds -n dynamo-power-test power-agent` shows
 DESIRED == CURRENT == READY == (# of A100 nodes the GPU operator labels
 with `nvidia.com/gpu.present=true`).
 
 **C. Pin to a single test node.** The live test exercises one 8-GPU node at
 a time. Pick an idle one and label it; the DGDs in §8.4 use `nodeSelector:
-power-test/node: kaim` to land all 5 worker pods on the same kubelet
+power-test/node: target` to land all 5 worker pods on the same kubelet
 (DGD-A prefill + decode, DGD-B prefill + decode, DGD-C decode = 5 pods on 8 GPUs).
 
 ```bash
 # Pick whichever A100 node currently has zero existing dynamo workloads
 TEST_NODE=aks-a100a-36888584-vmss000002
-kubectl label node $TEST_NODE power-test/node=kaim --overwrite
+kubectl label node $TEST_NODE power-test/node=target --overwrite
 ```
 
 **D. (Optional, only for §8.6 DCGM pass) Deploy a standalone hostengine.**
@@ -443,13 +443,13 @@ won't resolve. Two options, pick one:
   needs cluster admin.
 - **D.2 (namespace-local DS, self-service):** apply
   `examples/multi-dgd-live-test/20-nvidia-dcgm-standalone-ds.yaml` (see
-  §8.4) which creates a privileged DS in `kaim-dynamo-system` named
+  §8.4) which creates a privileged DS in `dynamo-power-test` named
   `nvidia-dcgm-standalone` running `nv-hostengine -b 0.0.0.0 -p 5555` +
   a headless Service exposed at
-  `nvidia-dcgm-standalone.kaim-dynamo-system.svc.cluster.local`. Then
+  `nvidia-dcgm-standalone.dynamo-power-test.svc.cluster.local`. Then
   re-install Power Agent with
   `--set agent.actuator=dcgm
-   --set agent.dcgm.host=nvidia-dcgm-standalone.kaim-dynamo-system.svc.cluster.local
+   --set agent.dcgm.host=nvidia-dcgm-standalone.dynamo-power-test.svc.cluster.local
    --set agent.dcgm.enforce=true`. Restricted to our namespace; no
   cluster-wide effect.
 
@@ -465,7 +465,7 @@ introduced by PR #9683 alongside the live test that consumes them
 ```
 examples/multi-dgd-live-test/
 ├── README.md                          # apply order + recovery
-├── 00-namespace.yaml                  # kaim-dynamo-system + pull-secret reference
+├── 00-namespace.yaml                  # dynamo-power-test + pull-secret reference
 ├── 10-power-agent-values-nvml.yaml    # helm values override for §8.3.B
 ├── 11-power-agent-values-dcgm.yaml    # helm values override for §8.3.D.2 retest
 ├── 20-nvidia-dcgm-standalone-ds.yaml  # §8.3.D.2 alternative to cluster-wide flip
@@ -515,7 +515,7 @@ hand-debugging easy):
    dynamo.nvidia.com/gpu-power-limit=<W>` on every worker pod it owns
    (exact format from `core/base.py::_apply_power_annotations`:
    `logger.info("Annotated pod %s with %s=%s", ...)`), and
-   `kubectl get pod -n kaim-dynamo-system <worker> -o
+   `kubectl get pod -n dynamo-power-test <worker> -o
    jsonpath='{.metadata.annotations.dynamo\.nvidia\.com/gpu-power-limit}'`
    returns the §8.2 value. Pod count = 5 (A-prefill, A-decode, B-prefill,
    B-decode, C-decode). Distinct annotation values across the 5 pods = 4
@@ -540,9 +540,9 @@ hand-debugging easy):
    Prometheus from `power-agent` pod on `$TEST_NODE`:
 
    ```bash
-   POD=$(kubectl get pod -n kaim-dynamo-system -l app.kubernetes.io/component=power-agent \
+   POD=$(kubectl get pod -n dynamo-power-test -l app.kubernetes.io/component=power-agent \
          --field-selector spec.nodeName=$TEST_NODE -o name)
-   kubectl exec -n kaim-dynamo-system $POD -- curl -s localhost:9100/metrics \
+   kubectl exec -n dynamo-power-test $POD -- curl -s localhost:9100/metrics \
        | grep dynamo_power_agent_applied_limit_watts
    ```
 
@@ -560,7 +560,7 @@ hand-debugging easy):
    into the power-agent pod and read NVML directly:
 
    ```bash
-   kubectl exec -n kaim-dynamo-system $POD -- python -c \
+   kubectl exec -n dynamo-power-test $POD -- python -c \
      "import pynvml; pynvml.nvmlInit(); \
       print([(i, pynvml.nvmlDeviceGetPowerManagementLimit(pynvml.nvmlDeviceGetHandleByIndex(i))/1000) for i in range(8)])"
    ```
@@ -609,7 +609,7 @@ hand-debugging easy):
 
 **Pre-conditions:** all of §8.5 plus §8.3.D.2 done (standalone hostengine
 DS healthy). Power Agent re-installed with
-`--set agent.actuator=dcgm --set agent.dcgm.host=...kaim-dynamo-system...
+`--set agent.actuator=dcgm --set agent.dcgm.host=...dynamo-power-test...
 --set agent.dcgm.enforce=true`.
 
 **Assertions** that differ from §8.5:
@@ -624,9 +624,9 @@ DS healthy). Power Agent re-installed with
    # On the same node, query DCGM hostengine directly, NOT NVML.
    # DCGM 4.x does not accept `-g all -j` for config --get, so enumerate
    # the Power-Agent-created per-GPU groups and query each one.
-   kubectl exec -n kaim-dynamo-system <hostengine-pod> -- \
+   kubectl exec -n dynamo-power-test <hostengine-pod> -- \
        dcgmi group --list -j
-   kubectl exec -n kaim-dynamo-system <hostengine-pod> -- \
+   kubectl exec -n dynamo-power-test <hostengine-pod> -- \
        dcgmi config --get -g <dynamo-power-agent-gpu-N group-id> -j
    ```
 
@@ -720,7 +720,7 @@ because it requires 8 GPUs and the §8.3 setup.
   parametrize over `hw_sku` and re-run with the SKU-keyed cap table.
 - **TRTLLM / SGLang multi-framework live coverage.** Stays in Tier 2
   (FakeNode). Will become testable once those runtime images are proven
-  pullable in `kaim-dynamo-system` (need an nvstaging-scoped pull-secret,
+  pullable in `dynamo-power-test` (need an nvstaging-scoped pull-secret,
   or a public mirror of the runtime image).
 - **MIG.** Out of scope per §6 (Phase 2+).
 
@@ -921,10 +921,10 @@ Findings categorized H/M/L by severity, all verified before fix.
 5. **M2 — wrong DCGM standalone DS file path and service hostname in
    §8.3.D.2.** The doc referenced `nvidia-dcgm-standalone-ds.yaml`
    (omitting the `20-` prefix) and host
-   `nvidia-dcgm.kaim-dynamo-system.svc.cluster.local`. The actual file
+   `nvidia-dcgm.dynamo-power-test.svc.cluster.local`. The actual file
    is `20-nvidia-dcgm-standalone-ds.yaml`, the Service is
    `nvidia-dcgm-standalone`, and the fully-qualified DNS is
-   `nvidia-dcgm-standalone.kaim-dynamo-system.svc.cluster.local`.
+   `nvidia-dcgm-standalone.dynamo-power-test.svc.cluster.local`.
    The `11-power-agent-values-dcgm.yaml` had the correct hostname
    all along (`agent.dcgm.host`), so the doc was the lone offender.
    Fixed.
@@ -973,7 +973,7 @@ Tier 3 specialization for the AKS `dpp-dev-env` cluster. Added §8 with:
 1. **Cluster ground truth table (§8.1).** Recorded the verified state of
    the live cluster as of 2026-05-21: 3× 8-GPU A100 nodes; no Power Agent
    DS deployed; no `nvidia-dcgm` hostengine (only `dcgm-exporter`); no
-   TRTLLM / SGLang DGDs anywhere; `kaim-dynamo-system` has no operator yet;
+   TRTLLM / SGLang DGDs anywhere; `dynamo-power-test` has no operator yet;
    pull-secret reaches `nvcr.io` only. Each downstream §8.x decision
    traces back to a row in this table.
 2. **A100 cap re-baseline (§8.2).** Re-baselined cap math from B200 max
