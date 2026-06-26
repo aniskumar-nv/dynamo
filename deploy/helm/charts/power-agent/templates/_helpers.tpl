@@ -64,16 +64,47 @@ Create the name of the service account to use
 {{- end }}
 
 {{/*
-Validate that image.tag is set. The :latest fallback was rejected on PR #9682
-review (CodeRabbit comment on daemonset.yaml:58). Pin a release tag or
+Validate that the production image.tag is set — but only when the DaemonSet
+is the thing being installed. Dev-pod mode uses dev.image.* instead (validated
+by validateDevImageTag), so gating on daemonset.enabled avoids forcing a dummy
+--set image.tag on dev-only installs. The :latest fallback was rejected on
+PR #9682 review (CodeRabbit comment on daemonset.yaml:58). Pin a release tag or
 sha256:digest at install time:
     --set image.tag=v1.0.0
     --set image.tag=sha256:abc...
 */}}
 {{- define "power-agent.validateImageTag" -}}
-{{- if not .Values.image.tag -}}
-{{- fail "image.tag is required (pin to a release tag or sha256:digest; :latest is not supported)" -}}
+{{- if and .Values.daemonset.enabled (not .Values.image.tag) -}}
+{{- fail "image.tag is required when daemonset.enabled (pin to a release tag or sha256:digest; :latest is not supported)" -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+Validate that dev.image.tag is set when dev-pod mode is enabled. Mirror of
+validateImageTag for the dev iteration image; keeps dev installs from silently
+falling back to a mutable tag.
+*/}}
+{{- define "power-agent.validateDevImageTag" -}}
+{{- if and .Values.dev.enabled (not .Values.dev.image.tag) -}}
+{{- fail "dev.image.tag is required when dev.enabled (pin the dev iteration image; :latest is not supported)" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Build an image reference, choosing the correct separator for the tag.
+
+A sha256 digest must be joined with "@" (repo@sha256:...); only a named tag
+uses ":". Hard-coding ":" produces an invalid "repo:sha256:..." reference when
+image.tag is a digest. Since values.yaml explicitly allows pinning to either a
+release tag or a sha256 digest, detect the digest form and switch separators.
+Per PR #9682 @sttts review (daemonset.yaml:64).
+
+Call with a dict, e.g.:
+    {{ include "power-agent.imageRef" (dict "repository" .Values.image.repository "tag" .Values.image.tag) }}
+*/}}
+{{- define "power-agent.imageRef" -}}
+{{- $sep := ternary "@" ":" (hasPrefix "sha256:" .tag) -}}
+{{- printf "%s%s%s" .repository $sep .tag -}}
 {{- end -}}
 
 {{/*

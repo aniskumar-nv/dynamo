@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Power Agent — per-node NVML power-cap enforcement DaemonSet.
-# See deploy/helm/charts/power-agent/README.md for usage and
-# docs/design-docs/power-agent-helm-chart-plan.md for the design rationale.
 
 image:
   repository: nvcr.io/nvidia/ai-dynamo/power-agent
-  # REQUIRED. Pin to a release tag or sha256 digest. No default to avoid the
-  # `:latest` reproducibility footgun CodeRabbit flagged on PR #9682.
-  # `helm install` will fail fast at template time if this is empty.
+  # REQUIRED for DaemonSet mode (daemonset.enabled, the default). Pin to a
+  # release tag or sha256 digest. No default to avoid the `:latest`
+  # reproducibility footgun CodeRabbit flagged on PR #9682. `helm install`
+  # fails fast at template time if this is empty while daemonset.enabled.
+  # Dev-pod mode (dev.enabled) ignores this and uses dev.image.* instead.
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -128,7 +128,7 @@ daemonset:
 # for creating the ConfigMap separately BEFORE `helm install`:
 #
 #   kubectl create configmap dynamo-power-agent-script \
-#     --from-file=power_agent.py=components/power_agent/power_agent.py \
+#     --from-file=power_agent.py=deploy/power-agent/power_agent.py \
 #     -n $NAMESPACE
 #
 # Without this ConfigMap the dev pod will stay Pending with a

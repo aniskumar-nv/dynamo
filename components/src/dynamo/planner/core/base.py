@@ -6,7 +6,8 @@
 This module contains **zero decision logic**.  It only gathers data from the
 outside world (Prometheus, FPM subscribers, K8s connectors) and applies
 scaling decisions back.  All scaling logic lives in
-:class:`~dynamo.planner.core.state_machine.PlannerStateMachine`.
+:class:`~dynamo.planner.core.state_machine.PlannerScalingState` and is exposed
+through builtin orchestrator plugins.
 
 Subclasses (PrefillPlanner, DecodePlanner, AggPlanner, DisaggPlanner) set
 mode-specific flags and override ``_bootstrap_regression`` and
@@ -32,8 +33,7 @@ from dynamo.planner.connectors.global_planner import GlobalPlannerConnector
 from dynamo.planner.connectors.kubernetes import KubernetesConnector
 from dynamo.planner.connectors.virtual import VirtualConnector
 from dynamo.planner.core.budget import POWER_ANNOTATION_KEY, _initialize_gpu_counts
-from dynamo.planner.core.engine_protocol import EngineProtocol, _PSMEngineAdapter
-from dynamo.planner.core.state_machine import PlannerStateMachine
+from dynamo.planner.core.engine_protocol import EngineProtocol
 from dynamo.planner.core.types import (
     EngineCapabilities,
     FpmObservations,
@@ -170,6 +170,8 @@ class NativePlannerBase:
                 )
             except Exception as e:
                 logger.error(f"Failed to start Prometheus metrics server: {e}")
+            self.prometheus_metrics.sla_target_ttft_ms.set(config.ttft_ms)
+            self.prometheus_metrics.sla_target_itl_ms.set(config.itl_ms)
 
         # Worker info (resolved during _async_init)
         self.prefill_worker_info = WorkerInfo()
@@ -202,40 +204,18 @@ class NativePlannerBase:
         # Live dashboard runner (started in _async_init)
         self._dashboard_runner: Optional[aiohttp.web.AppRunner] = None
 
-        # State machine (created after WorkerInfo is resolved) — PSM path only.
-        self._state_machine: Optional[PlannerStateMachine] = None
-
-        # Tick engine: the main-loop dispatch target. When
-        # ``scheduling.use_orchestrator`` is False (default), wraps
-        # ``self._state_machine``. When True, wraps an
-        # ``OrchestratorEngineAdapter``. Both paths satisfy
-        # ``EngineProtocol`` so ``run()`` doesn't branch.
+        # Tick engine: the main-loop dispatch target. It wraps the builtin
+        # plugin pipeline via ``OrchestratorEngineAdapter``.
         self._engine: Optional[EngineProtocol] = None
 
         # Cached worker counts from the most recent tick's input — lets
         # ``_log_decision_summary`` read current replica counts without
-        # reaching into PSM internals (which don't exist in the
-        # orchestrator path).
+        # reaching into engine internals.
         self._last_worker_counts: Optional[WorkerCounts] = None
 
     # ------------------------------------------------------------------
-    # State machine access
+    # Engine bootstrap
     # ------------------------------------------------------------------
-
-    def _ensure_state_machine(self) -> PlannerStateMachine:
-        if self._state_machine is None:
-            caps = build_worker_capabilities(
-                self.config,
-                self.prefill_worker_info,
-                self.decode_worker_info,
-            )
-            self._state_machine = PlannerStateMachine(self.config, caps)
-            self._warm_predictors()
-        return self._state_machine
-
-    @property
-    def state_machine(self) -> PlannerStateMachine:
-        return self._ensure_state_machine()
 
     async def _install_benchmark_fpms(
         self,
@@ -244,103 +224,82 @@ class NativePlannerBase:
         decode_fpms=None,
         agg_fpms=None,
     ) -> None:
-        """Route benchmark FPMs into the correct engine path.
+        """Install benchmark FPMs into the builtin orchestrator engine.
 
         Mode subclasses call this from ``_bootstrap_regression`` with
-        whatever FPM subset their mode produces. Routing:
-
-        - PSM path (``use_orchestrator=False``): call
-          ``PSM.load_benchmark_fpms(...)`` as before — identical to
-          legacy behaviour.
-        - Orchestrator path: call
-          ``OrchestratorEngineAdapter.bootstrap_from_fpms(...)`` which
-          builds regressions via a throwaway PSM, installs them on the
-          orchestrator's shared store, and fans out plugin Bootstrap RPC.
+        whatever FPM subset their mode produces. The builtin orchestrator
+        loads those FPMs into its shared scaling state and then runs the
+        plugin Bootstrap pass.
 
         Skipping ``None`` kwargs preserves mode-specific semantics:
         PrefillPlanner passes only ``prefill_fpms``; DisaggPlanner may
         pass one or both depending on ``fetch_pre_deployment_metrics``
         outcomes; AggPlanner passes ``agg_fpms``.
         """
-        if self.config.scheduling.use_orchestrator:
-            from dynamo.planner.plugins.orchestrator.engine_adapter import (
-                OrchestratorEngineAdapter,
-            )
+        from dynamo.planner.plugins.orchestrator.engine_adapter import (
+            OrchestratorEngineAdapter,
+        )
 
-            engine = self._ensure_engine()
-            assert isinstance(
-                engine, OrchestratorEngineAdapter
-            ), "use_orchestrator=True but engine is not OrchestratorEngineAdapter"
-            await engine.bootstrap_from_fpms(
-                prefill_fpms=prefill_fpms,
-                decode_fpms=decode_fpms,
-                agg_fpms=agg_fpms,
-            )
-        else:
-            # PSM path — match legacy behaviour. Only non-``None``
-            # values pass through so the call shape is unchanged for
-            # modes that supply only one FPM kind.
-            kwargs = {}
-            if prefill_fpms is not None:
-                kwargs["prefill_fpms"] = prefill_fpms
-            if decode_fpms is not None:
-                kwargs["decode_fpms"] = decode_fpms
-            if agg_fpms is not None:
-                kwargs["agg_fpms"] = agg_fpms
-            if kwargs:
-                self.state_machine.load_benchmark_fpms(**kwargs)
+        engine = self._ensure_engine()
+        assert isinstance(engine, OrchestratorEngineAdapter)
+        await engine.bootstrap_from_fpms(
+            prefill_fpms=prefill_fpms,
+            decode_fpms=decode_fpms,
+            agg_fpms=agg_fpms,
+            historical_traffic=self._load_predictor_warmup_observations(),
+        )
 
     def _ensure_engine(self) -> EngineProtocol:
-        """Lazy-construct the tick engine.
-
-        - PSM path (``scheduling.use_orchestrator=False``, default): build
-          ``PlannerStateMachine`` as before, wrap in ``_PSMEngineAdapter``.
-          ``self._state_machine`` stays populated for backwards-compat
-          callers (e.g. ``state_machine`` property).
-        - Orchestrator path (``scheduling.use_orchestrator=True``): build
-          ``OrchestratorEngineAdapter``. ``self._state_machine`` stays
-          ``None``.
-        """
+        """Lazy-construct the builtin-orchestrator tick engine."""
         if self._engine is not None:
             return self._engine
-        if self.config.scheduling.use_orchestrator:
-            caps = build_worker_capabilities(
-                self.config,
-                self.prefill_worker_info,
-                self.decode_worker_info,
-            )
-            from dynamo.planner.plugins.orchestrator.engine_adapter import (
-                OrchestratorEngineAdapter,
-            )
+        caps = build_worker_capabilities(
+            self.config,
+            self.prefill_worker_info,
+            self.decode_worker_info,
+        )
+        from dynamo.planner.plugins.orchestrator.engine_adapter import (
+            OrchestratorEngineAdapter,
+        )
 
-            self._engine = OrchestratorEngineAdapter(self.config, caps)
-        else:
-            psm = self._ensure_state_machine()
-            self._engine = _PSMEngineAdapter(psm)
+        self._engine = OrchestratorEngineAdapter(self.config, caps)
         return self._engine
 
-    def _warm_predictors(self) -> None:
+    def _load_predictor_warmup_observations(
+        self,
+    ) -> Optional[list[TrafficObservation]]:
         if self.config.load_predictor_warmup_trace is None:
-            return
-        assert self._state_machine is not None
+            return None
         try:
             metrics = extract_metrics_from_mooncake(
                 self.config.load_predictor_warmup_trace,
                 self.config.throughput_adjustment_interval_seconds,
             )
-            self._state_machine.warm_load_predictors(
-                [
-                    TrafficObservation(
-                        duration_s=self.config.throughput_adjustment_interval_seconds,
-                        num_req=float(m["request_count"]),
-                        isl=float(m["avg_isl"]),
-                        osl=float(m["avg_osl"]),
-                    )
-                    for m in metrics
-                ]
-            )
+            return [
+                TrafficObservation(
+                    duration_s=self.config.throughput_adjustment_interval_seconds,
+                    num_req=float(m["request_count"]),
+                    isl=float(m["avg_isl"]),
+                    osl=float(m["avg_osl"]),
+                )
+                for m in metrics
+            ]
         except Exception as e:
             logger.warning(f"Failed to warm load predictors: {e}")
+            return None
+
+    async def _bootstrap_engine_plugins_if_needed(self) -> None:
+        from dynamo.planner.plugins.orchestrator.engine_adapter import (
+            OrchestratorEngineAdapter,
+        )
+
+        engine = self._ensure_engine()
+        if isinstance(engine, OrchestratorEngineAdapter):
+            if engine.plugins_bootstrapped:
+                return
+            await engine.bootstrap_plugins(
+                historical_traffic=self._load_predictor_warmup_observations()
+            )
 
     # ------------------------------------------------------------------
     # Async init
@@ -398,6 +357,7 @@ class NativePlannerBase:
             )
 
         await self._bootstrap_regression()
+        await self._bootstrap_engine_plugins_if_needed()
 
         # Log operating mode at startup
         if self.config.advisory:
@@ -563,14 +523,17 @@ class NativePlannerBase:
                     f"{worker_info.summary()}"
                 )
 
-        if changed and self._state_machine is not None:
-            self._state_machine.update_capabilities(
-                build_worker_capabilities(
-                    self.config,
-                    self.prefill_worker_info,
-                    self.decode_worker_info,
-                )
+        if changed:
+            capabilities = build_worker_capabilities(
+                self.config,
+                self.prefill_worker_info,
+                self.decode_worker_info,
             )
+            update_engine_capabilities = getattr(
+                self._engine, "update_capabilities", None
+            )
+            if callable(update_engine_capabilities):
+                update_engine_capabilities(capabilities)
 
     # ------------------------------------------------------------------
     # Data collection (runtime I/O)
@@ -746,7 +709,7 @@ class NativePlannerBase:
         queries to keep the per-load-tick scrape cheap.
 
         The observation is still returned when metrics are unavailable so the
-        state machine can retain last-value runtime metadata without skipping
+        planner can retain last-value runtime metadata without skipping
         the load tick.
         """
         assert self.model_name is not None
@@ -858,7 +821,7 @@ class NativePlannerBase:
             # a cheap kv-hit-rate-only scrape (over the load interval) on
             # each load tick so the planner can still discount prefill work
             # by recent prefix reuse.
-            if tick.run_throughput_scaling:
+            if tick.use_full_traffic_metrics:
                 traffic = await self._collect_traffic()
             else:
                 traffic = await self._collect_kv_hit_rate_observation(
@@ -961,24 +924,16 @@ class NativePlannerBase:
     def _current_worker_counts(self) -> tuple[int, int]:
         """Best-known current (prefill, decode) ready worker counts.
 
-        Prefers ``self._last_worker_counts`` (cached each tick in ``run()``),
-        which is the only count source the orchestrator path has — it has no
-        equivalent of PSM's ``_num_p_workers`` / ``_num_d_workers`` internals.
-        Falls back to those PSM counters only when a state machine already
-        exists; never touches the ``state_machine`` property, which would
-        lazily *construct* a PSM (and warm predictors) on the orchestrator
-        path. Shared by ``_scaling_up`` and ``_log_decision_summary`` so the
-        two can't drift.
+        Reads ``self._last_worker_counts``, cached each tick in ``run()`` from
+        the tick input — the count source the orchestrator engine exposes.
+        Returns ``(0, 0)`` before the first worker-state tick populates it.
+        Shared by ``_scaling_up`` and ``_log_decision_summary`` so the two
+        can't drift.
         """
         if self._last_worker_counts is not None:
             return (
                 self._last_worker_counts.ready_num_prefill or 0,
                 self._last_worker_counts.ready_num_decode or 0,
-            )
-        if self._state_machine is not None:
-            return (
-                self._state_machine._num_p_workers,
-                self._state_machine._num_d_workers,
             )
         return 0, 0
 
@@ -988,9 +943,9 @@ class NativePlannerBase:
         A scale-up means the operator will create new worker pods, which start
         without the power-limit annotation; the caller uses this to force a
         prompt annotation sweep instead of waiting out the steady-state
-        throttle. Reads current counts via ``_current_worker_counts`` (cached
-        counts first), the same source ``_log_decision_summary`` uses, so the
-        force decision is correct on both the PSM and orchestrator paths.
+        throttle. Reads current counts via ``_current_worker_counts``, the
+        same source ``_log_decision_summary`` uses, so the force decision
+        stays consistent with the logged summary.
         Scale-downs and holds return False because they create no pods.
         """
         decision = effects.scale_to
@@ -1074,10 +1029,9 @@ class NativePlannerBase:
         """Log a one-line summary of the scaling decision after each tick.
 
         Current worker counts come from ``_current_worker_counts`` — the
-        cached ``self._last_worker_counts`` (set in ``run()``) in both engine
-        paths, falling back to PSM internals only on the PSM path, since the
-        orchestrator path has no equivalent of PSM's ``_num_p_workers`` /
-        ``_num_d_workers``.
+        cached ``self._last_worker_counts`` set in ``run()`` — shared with
+        ``_scaling_up`` so the logged summary and the sweep-force decision
+        cannot drift.
         """
         decision = effects.scale_to
         diag = effects.diagnostics
@@ -1183,6 +1137,25 @@ class NativePlannerBase:
                 diag.throughput_decision_reason or "unset"
             )
 
+    @staticmethod
+    def _should_emit_tick_diagnostics(
+        tick: ScheduledTick, effects: PlannerEffects
+    ) -> bool:
+        """Return True for ticks that should affect operator diagnostics.
+
+        The plugin pipeline may run more frequently than load / throughput
+        builtin plugins. No-op pipeline ticks should not overwrite
+        Prometheus gauges, add blank report rows, or spam summary logs.
+        """
+        diag = effects.diagnostics
+        return (
+            tick.run_load_scaling
+            or tick.run_throughput_scaling
+            or effects.scale_to is not None
+            or bool(diag.audit_events)
+            or bool(diag.short_circuit_reason)
+        )
+
     # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
@@ -1204,23 +1177,28 @@ class NativePlannerBase:
 
                 tick_input = await self._gather_tick_input(next_tick)
                 self._publish_inventory_and_gpu_hours(tick_input)
-                # Cache worker counts for _log_decision_summary (both
-                # engine paths); None when the tick doesn't request them.
+                # Cache worker counts for _log_decision_summary and the
+                # power-annotation sweep; None when the tick doesn't request
+                # them.
                 if tick_input.worker_counts is not None:
                     self._last_worker_counts = tick_input.worker_counts
-                # Dual-path: drive ticks through EngineProtocol
-                # (PSM or orchestrator chosen by use_orchestrator flag),
-                # not the direct PSM call upstream main has.
+                # Drive ticks through the builtin orchestrator EngineProtocol.
                 effects = await engine.tick(next_tick, tick_input)
                 await self._apply_effects(effects)
                 # Phase 1: reconcile per-GPU power-limit annotations, throttled
                 # in steady state and forced for one interval after a scale-up.
+                # Runs independently of diagnostic emission — annotations are a
+                # cluster-side effect, not an operator-diagnostics signal.
                 if self._should_sweep_power_annotations(now, effects):
                     await self._apply_power_annotations()
-                self._report_diagnostics(next_tick, effects.diagnostics)
-                self._log_decision_summary(effects)
+                emit_diagnostics = self._should_emit_tick_diagnostics(
+                    next_tick, effects
+                )
+                if emit_diagnostics:
+                    self._report_diagnostics(next_tick, effects.diagnostics)
+                    self._log_decision_summary(effects)
 
-                if self._recorder.enabled:
+                if self._recorder.enabled and emit_diagnostics:
                     try:
                         self._recorder.record(
                             tick_input,
