@@ -534,7 +534,8 @@ class PrometheusAPIClient:
                 f'exported_pod=~"^{dgd_name}-[0-9]+-.*"}})'
             )
             if result:
-                return float(result[0]["value"][1])
+                value = float(result[0]["value"][1])
+                return value if math.isfinite(value) else None
         except Exception as e:
             logger.debug("get_total_dgd_power query failed: %s", e)
         return None

@@ -647,7 +647,7 @@ class PlannerConfig(BaseModel):
         description=(
             "Per-GPU fail-closed cap (watts) the Power Agent applies on cold-start "
             "GPUs (no prior cap) when annotation parsing fails. Required when "
-            "enable_power_awareness=True. Recommended: ~70%% of SKU TDP "
+            "enable_power_awareness=True. Recommended: ~70% of SKU TDP "
             "(e.g. 500W on H200 SXM, 490W on H100 SXM)."
         ),
     )
@@ -817,7 +817,7 @@ class PlannerConfig(BaseModel):
                     "power_agent_safe_default_watts is required when "
                     "enable_power_awareness=True. This is the cold-start fail-closed cap "
                     "the Power Agent applies on a fresh GPU (no prior cap) when "
-                    "annotation parsing fails. Recommended: ~70%% of SKU TDP "
+                    "annotation parsing fails. Recommended: ~70% of SKU TDP "
                     "(e.g. 500W on H200 SXM)."
                 )
 

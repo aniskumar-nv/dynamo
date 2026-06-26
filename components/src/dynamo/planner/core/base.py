@@ -914,7 +914,7 @@ class NativePlannerBase:
                     POWER_ANNOTATION_KEY,
                     limit_str,
                 )
-            except Exception as e:
+            except ApiException as e:
                 logger.warning(
                     "Failed to patch power annotation on pod %s: %s",
                     pod.metadata.name,

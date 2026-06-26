@@ -703,9 +703,14 @@ def _throttle_planner(config, p_workers=2, d_workers=2):
     planner.config = config
     planner._last_power_annotation_sweep_s = 0.0
     planner._force_power_annotations_until_s = 0.0
-    # PSM path: no cached worker_counts this tick, fall back to PSM internals.
-    planner._last_worker_counts = None
-    planner._state_machine = Mock(_num_p_workers=p_workers, _num_d_workers=d_workers)
+    # Orchestrator-only path: current worker counts come from the cached tick
+    # input (``_last_worker_counts``), the single source ``_current_worker_counts``
+    # reads. The legacy PSM fallback was removed, so ``_state_machine`` is left
+    # unset (None); tests that assert it is never consulted populate it locally.
+    planner._last_worker_counts = Mock(
+        ready_num_prefill=p_workers, ready_num_decode=d_workers
+    )
+    planner._state_machine = None
     return planner
 
 

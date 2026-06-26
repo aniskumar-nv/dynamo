@@ -15,6 +15,11 @@
 # Private repos referenced in docs (404 to unauthenticated lychee)
 ^https:[/][/]github\.com/ai-dynamo/pi-dynamo-provider
 
+# New-in-this-PR README referenced by docs/design-docs/multi-tenant-test.md.
+# The absolute blob/main URL 404s until this PR merges; once merged the link
+# resolves and this entry can be removed.
+^https:[/][/]github\.com/ai-dynamo/dynamo/blob/main/examples/multi-dgd-live-test/README\.md$
+
 # Redirects to networking-docs.nvidia.com which refuses connections from
 # GitHub runners (network/firewall). The page loads from a normal browser.
 ^https://docs\.nvidia\.com/networking/display/cokan10/network\+operator

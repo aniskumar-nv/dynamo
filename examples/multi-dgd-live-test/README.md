@@ -327,7 +327,7 @@ kubectl apply -f $FIX_DIR/00-namespace.yaml
 kubectl label node $TEST_NODE power-test/node=target --overwrite
 
 # B.2 — Power Agent in NVML mode (skip operator + DGDs)
-helm.exe upgrade --install power-agent deploy/helm/charts/power-agent \
+helm upgrade --install power-agent deploy/helm/charts/power-agent \
     --namespace $NS \
     -f $FIX_DIR/10-power-agent-values-nvml.yaml \
     --wait --timeout 5m
@@ -361,10 +361,10 @@ kubectl apply -f $FIX_DIR/20-nvidia-dcgm-standalone-ds.yaml
 kubectl rollout status ds/nvidia-dcgm-standalone -n $NS --timeout=180s
 
 # B.6 — clean cut-over to DCGM-mode Power Agent
-helm.exe uninstall power-agent -n $NS
-kubectl wait pod -n $NS -l app.kubernetes.io/name=power-agent \
+helm uninstall power-agent -n $NS
+kubectl wait pod -n $NS -l app.kubernetes.io/component=power-agent \
     --for=delete --timeout=90s || true
-helm.exe install power-agent deploy/helm/charts/power-agent \
+helm install power-agent deploy/helm/charts/power-agent \
     --namespace $NS \
     -f $FIX_DIR/11-power-agent-values-dcgm.yaml \
     --wait --timeout 5m

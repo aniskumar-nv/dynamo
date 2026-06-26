@@ -308,7 +308,7 @@ test backed by real K8s objects on the AKS `dpp-dev-env` cluster.
 > were executed end-to-end on `aks-a100b-22138447-vmss000000`. Results
 > + 10 PR findings discovered during the run + the exact patches kept
 > in tree to enable re-pro are written up in
-> [`examples/multi-dgd-live-test/README.md`](../../examples/multi-dgd-live-test/README.md)
+> [`examples/multi-dgd-live-test/README.md`](https://github.com/ai-dynamo/dynamo/blob/main/examples/multi-dgd-live-test/README.md)
 > under "2026-05-21 live-run record on dpp-dev-env AKS". Subsequent
 > reviewers updating this design doc should keep that README's
 > `Findings #1..N` numbering stable when adding new ones.

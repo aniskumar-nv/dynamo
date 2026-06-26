@@ -30,9 +30,10 @@ The `scaling_real` test mutates the DGD spec; opt in via:
 
 from __future__ import annotations
 
+import asyncio
 import os
-import time
 
+import httpx
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -57,11 +58,13 @@ _K8S_NAMESPACE = os.environ.get("DYN_PARENT_DGD_K8S_NAMESPACE") or os.environ.ge
 )
 _DYN_NAMESPACE = os.environ.get("DYN_NAMESPACE", "dynamo")
 
-if not (_IN_CLUSTER and _DGD_NAME):
+if not (_IN_CLUSTER and _DGD_NAME and _K8S_NAMESPACE):
     pytest.skip(
         "Live-cluster tests require running inside the dev pod with "
-        "DYN_PARENT_DGD_K8S_NAME set. "
-        f"in_cluster={_IN_CLUSTER}, DYN_PARENT_DGD_K8S_NAME={_DGD_NAME!r}",
+        "DYN_PARENT_DGD_K8S_NAME and a resolvable namespace "
+        "(DYN_PARENT_DGD_K8S_NAMESPACE or POD_NAMESPACE) set. "
+        f"in_cluster={_IN_CLUSTER}, DYN_PARENT_DGD_K8S_NAME={_DGD_NAME!r}, "
+        f"namespace={_K8S_NAMESPACE!r}",
         allow_module_level=True,
     )
 
@@ -76,6 +79,9 @@ pytestmark = [
     pytest.mark.pre_merge,
     pytest.mark.integration,
     pytest.mark.planner,
+    # Live K8s API calls, an HTTP POST, and a disruptive scale op: bound the
+    # whole module so a stuck apiserver/frontend call can't hang CI.
+    pytest.mark.timeout(300),
 ]
 
 
@@ -170,33 +176,35 @@ class TestTgpAnnotationRoundTrip:
                     body={"metadata": {"annotations": {POWER_ANNOTATION_KEY: None}}},
                 )
 
-    def test_patch_is_idempotent_same_value(
+    def test_patch_same_value_keeps_annotation_stable(
         self,
         kube_api: KubernetesAPI,
         core_api,
         any_worker_pod,
     ):
-        """Re-patching with the same value must not change the resource version."""
+        """Re-patching with the same value leaves the annotation unchanged.
+
+        We assert on the observable planner contract — the annotation value is
+        stable across repeated writes — rather than on apiserver
+        ``resourceVersion`` no-op behaviour, which is a server-side
+        implementation detail unrelated to planner logic. (The planner's own
+        write-suppression for unchanged values lives in
+        ``_apply_power_annotations``, exercised separately below.)
+        """
         pod_name = any_worker_pod.metadata.name
         original = (any_worker_pod.metadata.annotations or {}).get(POWER_ANNOTATION_KEY)
 
         try:
             kube_api.patch_pod_annotation(pod_name, POWER_ANNOTATION_KEY, "350")
-            after_first = core_api.read_namespaced_pod(
-                name=pod_name, namespace=_K8S_NAMESPACE
-            )
-            rv_first = after_first.metadata.resource_version
-
             kube_api.patch_pod_annotation(pod_name, POWER_ANNOTATION_KEY, "350")
             after_second = core_api.read_namespaced_pod(
                 name=pod_name, namespace=_K8S_NAMESPACE
             )
 
-            # Strategic-merge of an unchanged value is a server-side no-op,
-            # so the resource version should not bump.
+            actual = (after_second.metadata.annotations or {}).get(POWER_ANNOTATION_KEY)
             assert (
-                after_second.metadata.resource_version == rv_first
-            ), "Re-patching with the same value triggered a spec mutation"
+                actual == "350"
+            ), f"Re-patching with the same value changed the annotation to {actual!r}"
         finally:
             if original is not None:
                 kube_api.patch_pod_annotation(pod_name, POWER_ANNOTATION_KEY, original)
@@ -269,29 +277,32 @@ class TestPostBusyThresholdLive:
             pytest.skip("No Running frontend pod with pod IP")
         pod = running[0]
 
-        try:
-            model = connector.get_model_name(
-                require_prefill=False, require_decode=False
-            )
-        except Exception:
-            model = os.environ.get("MODEL_NAME", "Qwen/Qwen3-0.6B")
+        # Fail fast on a genuinely broken deployment: honour an explicit
+        # MODEL_NAME override, otherwise resolve from the live DGD and let a
+        # PlannerError surface rather than masking it with a default.
+        model = os.environ.get("MODEL_NAME") or connector.get_model_name(
+            require_prefill=False, require_decode=False
+        )
+
+        # Resolve the frontend HTTP port from the live pod spec instead of
+        # assuming the default; the DGD may override it.
+        port = connector.resolve_frontend_http_port(pod, 8000)
 
         try:
             await connector.post_busy_threshold(
                 pod=pod,
                 model=model,
-                port=8000,
+                port=port,
                 # Very permissive: documented as "no admission control" defaults.
                 active_decode_blocks_threshold=1.0,
                 active_prefill_tokens_threshold=10_000_000,
                 active_prefill_tokens_threshold_frac=1.0,
             )
-        except Exception as exc:
+        except httpx.HTTPStatusError as exc:
             # 404 means this build of the frontend hasn't enabled the
             # admission-control endpoint yet — that's a build feature flag,
             # not a planner bug.
-            msg = str(exc).lower()
-            if "404" in msg or "not found" in msg:
+            if exc.response.status_code == 404:
                 pytest.skip(
                     "Frontend build does not expose /busy_threshold " f"(got {exc!r})"
                 )
@@ -309,9 +320,19 @@ def _read_dgd_generation(kube_api: KubernetesAPI) -> int:
 
 
 def _read_replicas_map(kube_api: KubernetesAPI) -> dict[str, int]:
+    """Map each v1beta1 component name to its replica count.
+
+    Reads ``spec.components`` (the v1beta1 list shape the planner validates),
+    not legacy ``spec.services``; the latter is always absent on v1beta1 DGDs
+    and would make this return ``{}``.
+    """
     dgd = kube_api.get_graph_deployment(_DGD_NAME)
-    services = dgd.get("spec", {}).get("services", {}) or {}
-    return {name: int(spec.get("replicas", 0)) for name, spec in services.items()}
+    components = dgd.get("spec", {}).get("components", []) or []
+    return {
+        component["name"]: int(component.get("replicas", 0))
+        for component in components
+        if "name" in component
+    }
 
 
 class TestScalingAdvisoryMode:
@@ -331,9 +352,9 @@ class TestScalingAdvisoryMode:
 
         replicas_before = _read_replicas_map(kube_api)
         gen_before = _read_dgd_generation(kube_api)
-        assert replicas_before, "DGD has no services?"
+        assert replicas_before, "DGD has no components?"
 
-        # Build a target that would visibly change at least one service.
+        # Build a target that would visibly change at least one component.
         first_service = next(iter(replicas_before))
         target = TargetReplica(
             sub_component_type=SubComponentType.DECODE,
@@ -541,7 +562,7 @@ class TestScalingRealMutation:
                 ],
                 blocking=False,
             )
-            time.sleep(2)  # let the API server settle
+            await asyncio.sleep(2)  # let the API server settle (non-blocking)
 
             replicas_after = _read_replicas_map(kube_api)
             gen_after = _read_dgd_generation(kube_api)

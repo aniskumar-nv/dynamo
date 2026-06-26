@@ -332,7 +332,7 @@ class KubernetesConnector(PlannerConnector):
             deployment = self.kube_api.get_graph_deployment(self.graph_deployment_name)
         try:
             service = get_component_from_type_or_name(deployment, sub_component_type)
-        except Exception:
+        except (PlannerError, ValueError):
             return []
         label_selector = (
             f"nvidia.com/dynamo-graph-deployment-name={self.graph_deployment_name},"

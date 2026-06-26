@@ -38,88 +38,94 @@ data:
       "max_kv_tokens": 32768
     }
 ---
-apiVersion: nvidia.com/v1alpha1
+apiVersion: nvidia.com/v1beta1
 kind: DynamoGraphDeployment
 metadata:
   name: vllm-dgd-c
   labels:
     purpose: power-aware-multi-dgd-test
 spec:
-  services:
-    Frontend:
-      componentType: frontend
+  components:
+    - name: Frontend
+      type: frontend
       replicas: 1
-      extraPodSpec:
-        mainContainer:
-          image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.1.1
-    Planner:
-      componentType: planner
+      podTemplate:
+        spec:
+          containers:
+            - name: main
+              image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.1.1
+    - name: Planner
+      type: planner
       replicas: 1
-      extraPodSpec:
-        mainContainer:
-          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:1.1.1
-          command:
-            - python3
-            - -m
-            - dynamo.planner
-          args:
-            - --config
-            # `mode: agg` is REQUIRED — without it, PlannerConfig dispatches
-            # DisaggPlanner (core/__main__.py:42) which requires a prefill
-            # worker that this DGD doesn't have. AggPlanner sets
-            # require_prefill=False, require_decode=True (core/adapters.py:99).
-            #
-            # prefill knob value is set but ignored by AggPlanner — the
-            # planner is responsible for short-circuiting the PREFILL branch
-            # (verified live by §8.5 assertion 2).
-            - >-
-              {"environment": "kubernetes",
-               "backend": "vllm",
-               "mode": "agg",
-               "throughput_adjustment_interval_seconds": 60,
-               "profile_results_dir": "/workspace/profiling_results",
-               "enable_power_awareness": true,
-               "prefill_engine_gpu_power_limit": 375,
-               "decode_engine_gpu_power_limit": 300,
-               "total_gpu_power_limit": 800,
-               "power_agent_safe_default_watts": 280}
-          volumeMounts:
+      podTemplate:
+        spec:
+          containers:
+            - name: main
+              image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:1.1.1
+              command:
+                - python3
+                - -m
+                - dynamo.planner
+              args:
+                - --config
+                # `mode: agg` is REQUIRED — without it, PlannerConfig dispatches
+                # DisaggPlanner (core/__main__.py:42) which requires a prefill
+                # worker that this DGD doesn't have. AggPlanner sets
+                # require_prefill=False, require_decode=True (core/adapters.py:99).
+                #
+                # prefill knob value is set but ignored by AggPlanner — the
+                # planner is responsible for short-circuiting the PREFILL branch
+                # (verified live by §8.5 assertion 2).
+                - >-
+                  {"environment": "kubernetes",
+                   "backend": "vllm",
+                   "mode": "agg",
+                   "throughput_adjustment_interval_seconds": 60,
+                   "profile_results_dir": "/workspace/profiling_results",
+                   "enable_power_awareness": true,
+                   "prefill_engine_gpu_power_limit": 375,
+                   "decode_engine_gpu_power_limit": 300,
+                   "total_gpu_power_limit": 800,
+                   "power_agent_safe_default_watts": 280}
+              volumeMounts:
+                - name: planner-profile-data
+                  mountPath: /workspace/profiling_results
+                  readOnly: true
+          volumes:
             - name: planner-profile-data
-              mountPath: /workspace/profiling_results
-              readOnly: true
-        volumes:
-          - name: planner-profile-data
-            configMap:
-              name: dgd-c-planner-profile-data
+              configMap:
+                name: dgd-c-planner-profile-data
     # AggPlanner topology: ONLY a decode worker, no prefill worker.
     # The operator's DGD validator should accept this shape (verified via
     # ycha-snapshot-poc's vllm-agg DGD, which uses an identical pattern).
-    VllmDecodeWorker:
-      componentType: worker
-      subComponentType: decode
-      envFromSecret: hf-token-secret
+    - name: VllmDecodeWorker
+      type: decode
       replicas: 1
-      sharedMemory:
-        size: 16Gi
-      resources:
-        limits:
-          gpu: "2"
-        requests:
-          gpu: "2"
-      extraPodSpec:
-        nodeSelector:
-          power-test/node: target
-        tolerations:
-          - key: nvidia.com/gpu
-            operator: Exists
-            effect: NoSchedule
-        mainContainer:
-          image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.1.1
-          workingDir: /workspace/examples/backends/vllm
-          command: [/bin/sh, -c]
-          args:
-            - >-
-              python3 -m dynamo.vllm
-              --model Qwen/Qwen3-0.6B
-              --tensor-parallel-size 2
-              --gpu-memory-utilization 0.85
+      sharedMemorySize: 16Gi
+      podTemplate:
+        spec:
+          nodeSelector:
+            power-test/node: target
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+          containers:
+            - name: main
+              image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.1.1
+              workingDir: /workspace/examples/backends/vllm
+              command: [/bin/sh, -c]
+              args:
+                - >-
+                  python3 -m dynamo.vllm
+                  --model Qwen/Qwen3-0.6B
+                  --tensor-parallel-size 2
+                  --gpu-memory-utilization 0.85
+              envFrom:
+                - secretRef:
+                    name: hf-token-secret
+              resources:
+                limits:
+                  nvidia.com/gpu: "2"
+                requests:
+                  nvidia.com/gpu: "2"

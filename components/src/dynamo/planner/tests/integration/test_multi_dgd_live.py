@@ -166,6 +166,10 @@ pytestmark = [
     pytest.mark.power_agent,
     pytest.mark.multi_dgd_live,
     pytest.mark.pre_merge,
+    # Long apiserver polls + minute-scale reconcile waits + in-pod exec
+    # streams: bound the module so a wedged stream / never-Ready pod can't
+    # hang CI indefinitely.
+    pytest.mark.timeout(900),
 ]
 
 
