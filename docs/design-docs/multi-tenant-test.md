@@ -485,13 +485,15 @@ Each DGD pins:
   to stamp them; the DGD CR's own `metadata.labels` does not need to carry
   the `graph-deployment-name` label (existence in pod labels is the
   product contract).
-- `spec.services.<WorkerKind>.subComponentType`: `prefill` / `decode` —
-  drives the operator's `sub-component-type` pod label (#A1, #A3).
-- `spec.services.<WorkerKind>.resources.limits.gpu`: 1 (TP=1) or 2 (TP=2).
-- `spec.services.<WorkerKind>.extraPodSpec.nodeSelector`:
-  `power-test/node: kaim` — pins all worker pods to a single node.
-- `spec.services.Planner.extraPodSpec.mainContainer.args[--config]`
-  includes:
+- `spec.components[].type`: `prefill` / `decode` — drives the operator's
+  `sub-component-type` pod label (#A1, #A3). (The manifests use the v1beta1
+  `spec.components` list, not the legacy v1alpha1 `spec.services` map.)
+- `spec.components[].podTemplate.spec.containers[name=main].resources.limits.nvidia.com/gpu`:
+  1 (TP=1) or 2 (TP=2).
+- `spec.components[].podTemplate.spec.nodeSelector`:
+  `power-test/node: target` — pins all worker pods to a single node.
+- the Planner component's
+  `podTemplate.spec.containers[name=main].args[--config]` includes:
   - `"mode": "disagg"` for A and B; `"mode": "agg"` for C.
     **Required** — PlannerConfig.mode has no implicit "agg" path
     (core/__main__.py:40-51 raises ValueError on missing/unknown mode).

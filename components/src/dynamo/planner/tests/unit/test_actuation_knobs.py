@@ -21,6 +21,7 @@ import os
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from kubernetes.client import ApiException
 
 from dynamo.planner.config.defaults import SubComponentType, TargetReplica
 from dynamo.planner.connectors.kubernetes import KubernetesConnector
@@ -365,15 +366,19 @@ class TestApplyPowerAnnotations:
         non_k8s_connector.get_component_pods.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_patch_exception_is_caught_not_raised(
+    async def test_patch_apierror_is_caught_not_raised(
         self, connector, mock_kube_api, caplog
     ):
-        """A PATCH failure must log a warning and let the tick continue."""
+        """A Kubernetes PATCH failure must log a warning and let the tick continue."""
         import logging
 
         pod = _mock_pod("worker-0")  # no annotation
         connector.get_component_pods = Mock(return_value=[pod])
-        mock_kube_api.patch_pod_annotation.side_effect = RuntimeError("k8s unavailable")
+        # Production narrows the catch to ApiException (core/base.py), so the
+        # injected failure must be the real Kubernetes patch error type.
+        mock_kube_api.patch_pod_annotation.side_effect = ApiException(
+            status=503, reason="k8s unavailable"
+        )
 
         planner = _bare_planner(
             connector,
@@ -387,6 +392,27 @@ class TestApplyPowerAnnotations:
             await planner._apply_power_annotations()
 
         assert any("worker-0" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_unexpected_patch_exception_propagates(
+        self, connector, mock_kube_api
+    ):
+        """A non-ApiException must NOT be swallowed — the catch is intentionally
+        narrow so unexpected reconciliation bugs surface instead of silently
+        no-op'ing the sweep."""
+        pod = _mock_pod("worker-0")  # no annotation
+        connector.get_component_pods = Mock(return_value=[pod])
+        mock_kube_api.patch_pod_annotation.side_effect = RuntimeError("unexpected bug")
+
+        planner = _bare_planner(
+            connector,
+            _power_config(prefill_cap=300),
+            require_prefill=True,
+            require_decode=False,
+        )
+
+        with pytest.raises(RuntimeError, match="unexpected bug"):
+            await planner._apply_power_annotations()
 
     @pytest.mark.asyncio
     async def test_multiple_pods_same_component_each_patched(
