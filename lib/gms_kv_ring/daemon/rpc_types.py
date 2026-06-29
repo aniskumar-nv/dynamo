@@ -1,13 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed contracts shared by daemon RPC handlers."""
+"""Typed contracts shared by daemon RPC handler domains."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable, TypeAlias
 
 if TYPE_CHECKING:
     from gms_kv_ring.daemon.server import Daemon
+
 Message: TypeAlias = dict[str, Any]
 Response: TypeAlias = dict[str, Any]
 Handler: TypeAlias = Callable[["Daemon", Message], Response]

@@ -2,14 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Content-address, staging, and restore RPC handlers."""
+
 from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Optional
 
-from gms_kv_ring.daemon.rpc_types import Handler, Message, Response
+from gms_kv_ring.daemon.rpc_types import (
+    Handler,
+    Message,
+    Response,
+    required_digest,
+    required_int,
+)
 
 logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from gms_kv_ring.daemon.server import Daemon
 
@@ -28,8 +36,8 @@ def handle_staging_reserve(daemon: "Daemon", msg: Message) -> Response:
             "ok": False,
             "error": "staging not enabled",
         }
-    content_hash = bytes.fromhex(str(msg["content_hash"]))
-    size = int(msg["size"])
+    content_hash = required_digest(msg)
+    size = required_int(msg, "size")
     source_daemon = str(msg.get("source_daemon", "unknown"))
     # Step 1: reserve the StagingTier slot. May coalesce
     # if another peer is already delivering this hash.
@@ -204,7 +212,7 @@ def handle_register_content_address(daemon: "Daemon", msg: Message) -> Response:
     # mapping. The router uses this index to drive
     # cross-node transfers (P4c). Multi-range payload
     # because one logical block spans N layers.
-    content_hash = bytes.fromhex(str(msg["content_hash"]))
+    content_hash = required_digest(msg)
     engine_id = str(msg["engine_id"])
     ranges_raw = msg.get("ranges", []) or []
     ranges = [(int(r["layer"]), int(r["offset"]), int(r["size"])) for r in ranges_raw]
