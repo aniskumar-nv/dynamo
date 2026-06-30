@@ -227,6 +227,44 @@ func TestDynamoGraphDeploymentValidator_GroveSchedulingMatrix(t *testing.T) {
 			},
 		},
 		{
+			name:         "Grove spec requires Grove",
+			groveEnabled: false,
+			mutate: func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
+				dgd.Spec.Grove = &nvidiacomv1beta1.GroveSpec{
+					UpdateStrategy: &nvidiacomv1beta1.GroveUpdateStrategy{
+						Type: nvidiacomv1beta1.GroveUpdateStrategyOnDelete,
+					},
+				}
+			},
+			wantErr: "spec.grove requires the Grove pathway",
+		},
+		{
+			name:         "Grove spec requires annotation-enabled Grove pathway",
+			groveEnabled: true,
+			mutate: func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
+				dgd.Annotations = map[string]string{
+					consts.KubeAnnotationEnableGrove: consts.KubeLabelValueFalse,
+				}
+				dgd.Spec.Grove = &nvidiacomv1beta1.GroveSpec{
+					UpdateStrategy: &nvidiacomv1beta1.GroveUpdateStrategy{
+						Type: nvidiacomv1beta1.GroveUpdateStrategyOnDelete,
+					},
+				}
+			},
+			wantErr: "spec.grove requires the Grove pathway",
+		},
+		{
+			name:         "Grove update strategy is allowed with Grove",
+			groveEnabled: true,
+			mutate: func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {
+				dgd.Spec.Grove = &nvidiacomv1beta1.GroveSpec{
+					UpdateStrategy: &nvidiacomv1beta1.GroveUpdateStrategy{
+						Type: nvidiacomv1beta1.GroveUpdateStrategyOnDelete,
+					},
+				}
+			},
+		},
+		{
 			name:         "minAvailable must be positive",
 			groveEnabled: true,
 			mutate: func(dgd *nvidiacomv1beta1.DynamoGraphDeployment) {

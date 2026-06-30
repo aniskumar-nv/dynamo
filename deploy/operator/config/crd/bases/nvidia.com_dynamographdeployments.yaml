@@ -294,6 +294,22 @@ spec:
                         - message: preferredWeight may only be set when enforcement is preferred
                           rule: '!has(self.preferredWeight) || (has(self.enforcement) && self.enforcement == ''preferred'')'
                   type: object
+                grove:
+                  description: |-
+                    Grove configures Grove-specific behavior for this graph deployment.
+                    Requires the Grove pathway.
+                  properties:
+                    updateStrategy:
+                      description: UpdateStrategy configures how Grove applies PodCliqueSet template updates.
+                      properties:
+                        type:
+                          description: Type indicates the Grove PodCliqueSet update strategy.
+                          enum:
+                            - RollingRecreate
+                            - OnDelete
+                          type: string
+                      type: object
+                  type: object
                 labels:
                   additionalProperties:
                     type: string
@@ -21105,6 +21121,22 @@ spec:
                           rule: '!has(self.enforcement) || self.enforcement != ''preferred'' || has(self.preferredWeight)'
                         - message: preferredWeight may only be set when enforcement is preferred
                           rule: '!has(self.preferredWeight) || (has(self.enforcement) && self.enforcement == ''preferred'')'
+                  type: object
+                grove:
+                  description: |-
+                    grove configures Grove-specific behavior for this graph deployment.
+                    Requires the Grove pathway.
+                  properties:
+                    updateStrategy:
+                      description: updateStrategy configures how Grove applies PodCliqueSet template updates.
+                      properties:
+                        type:
+                          description: type indicates the Grove PodCliqueSet update strategy.
+                          enum:
+                            - RollingRecreate
+                            - OnDelete
+                          type: string
+                      type: object
                   type: object
                 labels:
                   additionalProperties:

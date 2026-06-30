@@ -2296,6 +2296,15 @@ func GenerateGrovePodCliqueSet(
 	gangSet.Labels[commonconsts.KubeLabelDynamoGraphDeploymentName] = dynamoDeployment.Name
 	gangSet.Annotations = maps.Clone(dynamoDeployment.Spec.Annotations)
 	gangSet.Spec.Replicas = 1
+	if updateStrategy := dynamoDeployment.Spec.Grove.GetUpdateStrategy(); updateStrategy != "" {
+		groveUpdateStrategy, err := toGroveUpdateStrategy(updateStrategy)
+		if err != nil {
+			return nil, err
+		}
+		gangSet.Spec.UpdateStrategy = &grovev1alpha1.PodCliqueSetUpdateStrategy{
+			Type: groveUpdateStrategy,
+		}
+	}
 	gangSet.Spec.Template.HeadlessServiceConfig = &grovev1alpha1.HeadlessServiceConfig{
 		PublishNotReadyAddresses: true,
 	}
@@ -2441,6 +2450,17 @@ func GenerateGrovePodCliqueSet(
 	}
 
 	return gangSet, nil
+}
+
+func toGroveUpdateStrategy(updateStrategy v1beta1.GroveUpdateStrategyType) (grovev1alpha1.UpdateStrategyType, error) {
+	switch updateStrategy {
+	case v1beta1.GroveUpdateStrategyRollingRecreate:
+		return grovev1alpha1.RollingRecreateStrategy, nil
+	case v1beta1.GroveUpdateStrategyOnDelete:
+		return grovev1alpha1.OnDeleteStrategy, nil
+	default:
+		return "", fmt.Errorf("unsupported Grove update strategy %q", updateStrategy)
+	}
 }
 
 // generatePodSpecForRole builds the pod spec for a single role, handling GMS

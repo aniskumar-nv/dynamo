@@ -467,6 +467,11 @@ func TestDGD_RoundTrip_SpecLevelFields(t *testing.T) {
 				ClusterTopologyName: "default",
 				PackDomain:          v1beta1.TopologyDomain("rack"),
 			},
+			Grove: &v1beta1.GroveSpec{
+				UpdateStrategy: &v1beta1.GroveUpdateStrategy{
+					Type: v1beta1.GroveUpdateStrategyOnDelete,
+				},
+			},
 		},
 	}
 	got := roundTripFromV1beta1(t, src)

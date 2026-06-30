@@ -75,10 +75,46 @@ type DynamoGraphDeploymentSpec struct {
 	// +optional
 	TopologyConstraint *SpecTopologyConstraint `json:"topologyConstraint,omitempty"`
 
+	// grove configures Grove-specific behavior for this graph deployment.
+	// Requires the Grove pathway.
+	// +optional
+	Grove *GroveSpec `json:"grove,omitempty"`
+
 	// experimental groups graph-level preview features whose API shape and
 	// behavior may change in breaking ways between v1beta1 releases.
 	// +optional
 	Experimental *DynamoGraphDeploymentExperimentalSpec `json:"experimental,omitempty"`
+}
+
+type GroveSpec struct {
+	// updateStrategy configures how Grove applies PodCliqueSet template updates.
+	// +optional
+	UpdateStrategy *GroveUpdateStrategy `json:"updateStrategy,omitempty"`
+}
+
+type GroveUpdateStrategy struct {
+	// type indicates the Grove PodCliqueSet update strategy.
+	// +kubebuilder:validation:Enum=RollingRecreate;OnDelete
+	// +optional
+	Type GroveUpdateStrategyType `json:"type,omitempty"`
+}
+
+type GroveUpdateStrategyType string
+
+const (
+	GroveUpdateStrategyRollingRecreate GroveUpdateStrategyType = "RollingRecreate"
+	GroveUpdateStrategyOnDelete        GroveUpdateStrategyType = "OnDelete"
+)
+
+const (
+	DynamoGraphDeploymentConditionGroveOnDeleteUpdatePending = "GroveOnDeleteUpdatePending"
+)
+
+func (s *GroveSpec) GetUpdateStrategy() GroveUpdateStrategyType {
+	if s == nil || s.UpdateStrategy == nil {
+		return ""
+	}
+	return s.UpdateStrategy.Type
 }
 
 // DynamoGraphDeploymentExperimentalSpec groups graph-level opt-in preview

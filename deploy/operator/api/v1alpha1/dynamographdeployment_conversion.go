@@ -112,6 +112,10 @@ func ConvertFromDynamoGraphDeploymentSpec(src *DynamoGraphDeploymentSpec, dst *v
 		dst.TopologyConstraint = &v1beta1.SpecTopologyConstraint{}
 		ConvertFromSpecTopologyConstraint(src.TopologyConstraint, dst.TopologyConstraint)
 	}
+	if src.Grove != nil {
+		dst.Grove = &v1beta1.GroveSpec{}
+		ConvertFromGroveSpec(src.Grove, dst.Grove)
+	}
 	if src.Experimental != nil {
 		dst.Experimental = &v1beta1.DynamoGraphDeploymentExperimentalSpec{}
 		ConvertFromDynamoGraphDeploymentExperimentalSpec(src.Experimental, dst.Experimental)
@@ -419,6 +423,10 @@ func ConvertToDynamoGraphDeploymentSpec(src *v1beta1.DynamoGraphDeploymentSpec, 
 		dst.TopologyConstraint = &SpecTopologyConstraint{}
 		ConvertToSpecTopologyConstraint(src.TopologyConstraint, dst.TopologyConstraint)
 	}
+	if src.Grove != nil {
+		dst.Grove = &GroveSpec{}
+		ConvertToGroveSpec(src.Grove, dst.Grove)
+	}
 	if src.Experimental != nil {
 		dst.Experimental = &DynamoGraphDeploymentExperimentalSpec{}
 		ConvertToDynamoGraphDeploymentExperimentalSpec(src.Experimental, dst.Experimental)
@@ -578,6 +586,32 @@ func ConvertToDynamoGraphDeploymentExperimentalSpec(src *v1beta1.DynamoGraphDepl
 	if src.KvTransferPolicy != nil {
 		dst.KvTransferPolicy = &KvTransferPolicy{}
 		ConvertToKvTransferPolicy(src.KvTransferPolicy, dst.KvTransferPolicy)
+	}
+}
+
+func ConvertFromGroveSpec(src *GroveSpec, dst *v1beta1.GroveSpec) {
+	if src.UpdateStrategy != nil {
+		dst.UpdateStrategy = &v1beta1.GroveUpdateStrategy{}
+		ConvertFromGroveUpdateStrategy(src.UpdateStrategy, dst.UpdateStrategy)
+	}
+}
+
+func ConvertToGroveSpec(src *v1beta1.GroveSpec, dst *GroveSpec) {
+	if src.UpdateStrategy != nil {
+		dst.UpdateStrategy = &GroveUpdateStrategy{}
+		ConvertToGroveUpdateStrategy(src.UpdateStrategy, dst.UpdateStrategy)
+	}
+}
+
+func ConvertFromGroveUpdateStrategy(src *GroveUpdateStrategy, dst *v1beta1.GroveUpdateStrategy) {
+	*dst = v1beta1.GroveUpdateStrategy{
+		Type: v1beta1.GroveUpdateStrategyType(src.Type),
+	}
+}
+
+func ConvertToGroveUpdateStrategy(src *v1beta1.GroveUpdateStrategy, dst *GroveUpdateStrategy) {
+	*dst = GroveUpdateStrategy{
+		Type: GroveUpdateStrategyType(src.Type),
 	}
 }
 

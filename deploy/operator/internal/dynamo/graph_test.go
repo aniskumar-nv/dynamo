@@ -9327,6 +9327,65 @@ func TestGenerateGrovePodCliqueSet_PriorityClassName(t *testing.T) {
 	assert.Equal(t, "high-priority", pcs.Spec.Template.PriorityClassName)
 }
 
+func TestGenerateGrovePodCliqueSet_UpdateStrategy(t *testing.T) {
+	tests := []struct {
+		name         string
+		grove        *v1alpha1.GroveSpec
+		wantStrategy *grovev1alpha1.UpdateStrategyType
+	}{
+		{
+			name: "default leaves Grove strategy unset",
+		},
+		{
+			name: "RollingRecreate maps to Grove strategy",
+			grove: &v1alpha1.GroveSpec{
+				UpdateStrategy: &v1alpha1.GroveUpdateStrategy{
+					Type: v1alpha1.GroveUpdateStrategyRollingRecreate,
+				},
+			},
+			wantStrategy: ptr.To(grovev1alpha1.RollingRecreateStrategy),
+		},
+		{
+			name: "OnDelete maps to Grove strategy",
+			grove: &v1alpha1.GroveSpec{
+				UpdateStrategy: &v1alpha1.GroveUpdateStrategy{
+					Type: v1alpha1.GroveUpdateStrategyOnDelete,
+				},
+			},
+			wantStrategy: ptr.To(grovev1alpha1.OnDeleteStrategy),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dgd := &v1alpha1.DynamoGraphDeployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-dgd",
+					Namespace: "ns",
+				},
+				Spec: v1alpha1.DynamoGraphDeploymentSpec{
+					Grove: tt.grove,
+					Services: map[string]*v1alpha1.DynamoComponentDeploymentSharedSpec{
+						"worker": {
+							ComponentType: commonconsts.ComponentTypeWorker,
+							Replicas:      ptr.To(int32(1)),
+						},
+					},
+				},
+			}
+
+			pcs, err := GenerateGrovePodCliqueSet(context.Background(), betaDGD(t, dgd), &configv1alpha1.OperatorConfiguration{}, &controller_common.RuntimeConfig{}, nil, nil, nil, nil, nil)
+			require.NoError(t, err)
+			if tt.wantStrategy == nil {
+				assert.Nil(t, pcs.Spec.UpdateStrategy)
+				return
+			}
+			require.NotNil(t, pcs.Spec.UpdateStrategy)
+			assert.Equal(t, *tt.wantStrategy, pcs.Spec.UpdateStrategy.Type)
+		})
+	}
+}
+
 func TestGenerateDynamoComponentsDeployments_SpecMetadataPropagation(t *testing.T) {
 	dgd := &v1alpha1.DynamoGraphDeployment{
 		ObjectMeta: metav1.ObjectMeta{

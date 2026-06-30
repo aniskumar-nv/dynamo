@@ -113,6 +113,9 @@ func (v *dynamoGraphDeploymentValidation) validate(ctx context.Context) (admissi
 	if err := v.validatePriorityClassName(); err != nil {
 		errs = append(errs, err)
 	}
+	if err := v.validateGroveSpec(); err != nil {
+		errs = append(errs, err)
+	}
 	if err := v.validateTopologyConstraints(ctx, components); err != nil {
 		errs = append(errs, err)
 	}
@@ -489,6 +492,13 @@ func (v *dynamoGraphDeploymentValidation) validatePriorityClassName() error {
 		return nil
 	}
 	return v.grovePathwayRequiredError("spec.priorityClassName")
+}
+
+func (v *dynamoGraphDeploymentValidation) validateGroveSpec() error {
+	if v.deployment.Spec.Grove == nil || v.isGrovePathway() {
+		return nil
+	}
+	return v.grovePathwayRequiredError("spec.grove")
 }
 
 func (v *dynamoGraphDeploymentValidation) validateAnnotations() error {

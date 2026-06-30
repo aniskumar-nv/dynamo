@@ -714,6 +714,7 @@ _Appears in:_
 | `backendFramework` _string_ | BackendFramework specifies the backend framework (e.g., "sglang", "vllm", "trtllm"). |  | Enum: [sglang vllm trtllm] <br /> |
 | `restart` _[Restart](#restart)_ | Restart specifies the restart policy for the graph deployment. |  | Optional: \{\} <br /> |
 | `topologyConstraint` _[SpecTopologyConstraint](#spectopologyconstraint)_ | TopologyConstraint is the deployment-level topology constraint.<br />When set, topologyProfile is required and names the ClusterTopology CR to use.<br />packDomain is optional here — it can be omitted when only services carry constraints.<br />Services without their own topologyConstraint inherit from this value. |  | Optional: \{\} <br /> |
+| `grove` _[GroveSpec](#grovespec)_ | Grove configures Grove-specific behavior for this graph deployment.<br />Requires the Grove pathway. |  | Optional: \{\} <br /> |
 | `experimental` _[DynamoGraphDeploymentExperimentalSpec](#dynamographdeploymentexperimentalspec)_ | Experimental groups graph-level preview features whose API shape and<br />behavior may change in breaking ways between releases. |  | Optional: \{\} <br /> |
 
 
@@ -968,6 +969,55 @@ _Appears in:_
 | `deviceClassName` _string_ | DeviceClassName is the DRA DeviceClass to request GPUs from. | gpu.nvidia.com | Optional: \{\} <br /> |
 | `extraClientContainers` _string array_ | ExtraClientContainers lists additional user-declared containers that should<br />be wired as GMS clients in pods rendered from the enclosing spec.<br />DGD/DCD services apply this to service pods. Auto-created checkpoints<br />apply checkpoint job clients before creating the DynamoCheckpoint; manual<br />DynamoCheckpoint users must provide an already-prepared pod template.<br />In each rendered pod, only matching container names are wired; absent<br />names are ignored. |  | items:MaxLength: 63 <br />items:MinLength: 1 <br />items:Pattern: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$` <br />Optional: \{\} <br /> |
 | `extraClientPods` _[GMSClientPodSpec](#gmsclientpodspec) array_ | ExtraClientPods declares additional GMS client pods for inter-pod GMS. This field is<br />reserved for future use and is rejected until inter-pod client orchestration is wired. |  | Optional: \{\} <br /> |
+
+
+#### GroveSpec
+
+
+
+
+
+
+
+_Appears in:_
+- [DynamoGraphDeploymentSpec](#dynamographdeploymentspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `updateStrategy` _[GroveUpdateStrategy](#groveupdatestrategy)_ | UpdateStrategy configures how Grove applies PodCliqueSet template updates. |  | Optional: \{\} <br /> |
+
+
+#### GroveUpdateStrategy
+
+
+
+
+
+
+
+_Appears in:_
+- [GroveSpec](#grovespec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `type` _[GroveUpdateStrategyType](#groveupdatestrategytype)_ | Type indicates the Grove PodCliqueSet update strategy. |  | Enum: [RollingRecreate OnDelete] <br />Optional: \{\} <br /> |
+
+
+#### GroveUpdateStrategyType
+
+_Underlying type:_ _string_
+
+
+
+
+
+_Appears in:_
+- [GroveUpdateStrategy](#groveupdatestrategy)
+
+| Field | Description |
+| --- | --- |
+| `RollingRecreate` |  |
+| `OnDelete` |  |
 
 
 #### IngressSpec
@@ -2347,6 +2397,7 @@ _Appears in:_
 | `backendFramework` _string_ | backendFramework specifies the backend framework (e.g. "sglang", "vllm", "trtllm"). |  | Enum: [sglang vllm trtllm] <br /> |
 | `restart` _[Restart](#restart)_ | restart specifies the restart policy for the graph deployment. |  | Optional: \{\} <br /> |
 | `topologyConstraint` _[SpecTopologyConstraint](#spectopologyconstraint)_ | topologyConstraint is the deployment-level topology constraint. When<br />set, `spec.topologyConstraint.clusterTopologyName` names the ClusterTopology<br />CR to use. `spec.topologyConstraint.packDomain` is optional at this<br />level and can be omitted when only components carry constraints.<br />Components without their own `topologyConstraint` inherit from this value. |  | Optional: \{\} <br /> |
+| `grove` _[GroveSpec](#grovespec)_ | grove configures Grove-specific behavior for this graph deployment.<br />Requires the Grove pathway. |  | Optional: \{\} <br /> |
 | `experimental` _[DynamoGraphDeploymentExperimentalSpec](#dynamographdeploymentexperimentalspec)_ | experimental groups graph-level preview features whose API shape and<br />behavior may change in breaking ways between v1beta1 releases. |  | Optional: \{\} <br /> |
 
 
@@ -2544,6 +2595,55 @@ _Appears in:_
 | `t4` |  |
 | `mi200` | --- AMD ---<br /> |
 | `mi300` |  |
+
+
+#### GroveSpec
+
+
+
+
+
+
+
+_Appears in:_
+- [DynamoGraphDeploymentSpec](#dynamographdeploymentspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `updateStrategy` _[GroveUpdateStrategy](#groveupdatestrategy)_ | updateStrategy configures how Grove applies PodCliqueSet template updates. |  | Optional: \{\} <br /> |
+
+
+#### GroveUpdateStrategy
+
+
+
+
+
+
+
+_Appears in:_
+- [GroveSpec](#grovespec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `type` _[GroveUpdateStrategyType](#groveupdatestrategytype)_ | type indicates the Grove PodCliqueSet update strategy. |  | Enum: [RollingRecreate OnDelete] <br />Optional: \{\} <br /> |
+
+
+#### GroveUpdateStrategyType
+
+_Underlying type:_ _string_
+
+
+
+
+
+_Appears in:_
+- [GroveUpdateStrategy](#groveupdatestrategy)
+
+| Field | Description |
+| --- | --- |
+| `RollingRecreate` |  |
+| `OnDelete` |  |
 
 
 #### HardwareSpec

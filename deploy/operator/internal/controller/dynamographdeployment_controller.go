@@ -74,6 +74,9 @@ type Message string
 const (
 	reasonFailedToInitializeWorkerHash Reason = "failed_to_initialize_worker_hash"
 	reasonRollingUpdateFailed          Reason = "rolling_update_failed"
+
+	eventReasonGroveOnDeleteUpdatePending   = "GroveOnDeleteUpdatePending"
+	eventReasonGroveOnDeleteUpdateCompleted = "GroveOnDeleteUpdateCompleted"
 )
 
 // rbacManager interface for managing RBAC resources
@@ -282,34 +285,138 @@ func (r *DynamoGraphDeploymentReconciler) Reconcile(ctx context.Context, req ctr
 
 	reconcileResult, err := r.reconcileResources(ctx, dynamoDeployment)
 
-	state = reconcileResult.State
-	reason = reconcileResult.Reason
-	message = reconcileResult.Message
-	dynamoDeployment.Status.Components = reconcileResult.ComponentStatus
-	dynamoDeployment.Status.Restart = reconcileResult.RestartStatus
-
+	state, reason, message, err = r.applyReconcileResult(ctx, dynamoDeployment, reconcileResult, err)
 	if err != nil {
-		logger.Error(err, "failed to reconcile the resources")
-		reason = "failed_to_reconcile_the_resources"
 		return ctrl.Result{}, err
 	}
 
-	// Override state based on rolling update status if a rolling update is in progress
-	if dynamoDeployment.Status.RollingUpdate != nil {
-		switch dynamoDeployment.Status.RollingUpdate.Phase {
-		case nvidiacomv1beta1.RollingUpdatePhaseCompleted:
-			// Keep the reconcileResult state (should be Ready if resources are ready)
-		case nvidiacomv1beta1.RollingUpdatePhasePending, nvidiacomv1beta1.RollingUpdatePhaseInProgress:
-			// Rolling update in progress - resources are being transitioned
-			if state != nvidiacomv1beta1.DGDStateFailed {
-				state = nvidiacomv1beta1.DGDStatePending
-				reason = "rolling_update_in_progress"
-				message = "Rolling update in progress"
-			}
-		}
+	return ctrl.Result{}, nil
+}
+
+func (r *DynamoGraphDeploymentReconciler) applyReconcileResult(
+	ctx context.Context,
+	dgd *nvidiacomv1beta1.DynamoGraphDeployment,
+	reconcileResult ReconcileResult,
+	reconcileErr error,
+) (nvidiacomv1beta1.DGDState, Reason, Message, error) {
+	logger := log.FromContext(ctx)
+	state := reconcileResult.State
+	reason := reconcileResult.Reason
+	message := reconcileResult.Message
+	dgd.Status.Components = reconcileResult.ComponentStatus
+	dgd.Status.Restart = reconcileResult.RestartStatus
+
+	if reconcileErr != nil {
+		logger.Error(reconcileErr, "failed to reconcile the resources")
+		return state, "failed_to_reconcile_the_resources", message, reconcileErr
+	}
+	if err := r.updateGroveOnDeleteStatus(ctx, dgd); err != nil {
+		logger.Error(err, "failed to update Grove OnDelete status")
+		return state, "failed_to_update_grove_ondelete_status", message, err
 	}
 
-	return ctrl.Result{}, nil
+	state, reason, message = stateForRollingUpdate(dgd, state, reason, message)
+	return state, reason, message, nil
+}
+
+func stateForRollingUpdate(
+	dgd *nvidiacomv1beta1.DynamoGraphDeployment,
+	state nvidiacomv1beta1.DGDState,
+	reason Reason,
+	message Message,
+) (nvidiacomv1beta1.DGDState, Reason, Message) {
+	if dgd.Status.RollingUpdate == nil || state == nvidiacomv1beta1.DGDStateFailed {
+		return state, reason, message
+	}
+	switch dgd.Status.RollingUpdate.Phase {
+	case nvidiacomv1beta1.RollingUpdatePhasePending, nvidiacomv1beta1.RollingUpdatePhaseInProgress:
+		return nvidiacomv1beta1.DGDStatePending, "rolling_update_in_progress", "Rolling update in progress"
+	default:
+		return state, reason, message
+	}
+}
+
+func (r *DynamoGraphDeploymentReconciler) updateGroveOnDeleteStatus(ctx context.Context, dgd *nvidiacomv1beta1.DynamoGraphDeployment) error {
+	oldCondition := meta.FindStatusCondition(
+		dgd.Status.Conditions,
+		nvidiacomv1beta1.DynamoGraphDeploymentConditionGroveOnDeleteUpdatePending,
+	)
+	pending, updated, desired, err := r.groveOnDeleteUpdateProgress(ctx, dgd)
+	if err != nil {
+		return err
+	}
+	if !pending {
+		if oldCondition != nil && oldCondition.Status == metav1.ConditionTrue {
+			message := "All Grove OnDelete replicas have been updated."
+			dgd.AddStatusCondition(metav1.Condition{
+				Type:    nvidiacomv1beta1.DynamoGraphDeploymentConditionGroveOnDeleteUpdatePending,
+				Status:  metav1.ConditionFalse,
+				Reason:  eventReasonGroveOnDeleteUpdateCompleted,
+				Message: message,
+			})
+			r.Recorder.Event(dgd, corev1.EventTypeNormal, eventReasonGroveOnDeleteUpdateCompleted, message)
+		}
+		return nil
+	}
+
+	message := fmt.Sprintf(
+		"Grove OnDelete update is waiting for manual pod deletion: %d/%d replicas are updated. Delete outdated pods; Grove will recreate them from the latest PodCliqueSet template.",
+		updated,
+		desired,
+	)
+	if oldCondition == nil || oldCondition.Status != metav1.ConditionTrue || oldCondition.Message != message {
+		r.Recorder.Event(dgd, corev1.EventTypeWarning, eventReasonGroveOnDeleteUpdatePending, message)
+	}
+	dgd.AddStatusCondition(metav1.Condition{
+		Type:    nvidiacomv1beta1.DynamoGraphDeploymentConditionGroveOnDeleteUpdatePending,
+		Status:  metav1.ConditionTrue,
+		Reason:  eventReasonGroveOnDeleteUpdatePending,
+		Message: message,
+	})
+	return nil
+}
+
+func (r *DynamoGraphDeploymentReconciler) groveOnDeleteUpdateProgress(ctx context.Context, dgd *nvidiacomv1beta1.DynamoGraphDeployment) (bool, int32, int32, error) {
+	if dgd == nil || !isGroveOnDeleteStrategy(dgd) {
+		return false, 0, 0, nil
+	}
+	var updated int32
+	var desired int32
+	pcsName := dynamo.PCSNameForDGD(dgd.Name, dgd.Spec.Components)
+	for i := range dgd.Spec.Components {
+		component := &dgd.Spec.Components[i]
+		resourceName := fmt.Sprintf("%s-0-%s", pcsName, strings.ToLower(component.ComponentName))
+		if component.GetNumberOfNodes() > 1 || component.IsInterPodGMSEnabled() {
+			pcsg := &grovev1alpha1.PodCliqueScalingGroup{}
+			if err := r.Client.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: dgd.Namespace}, pcsg); err != nil {
+				if errors.IsNotFound(err) {
+					continue
+				}
+				return false, 0, 0, fmt.Errorf("get Grove PodCliqueScalingGroup %s/%s: %w", dgd.Namespace, resourceName, err)
+			}
+			updated += pcsg.Status.UpdatedReplicas
+			desired += pcsg.Spec.Replicas
+			continue
+		}
+
+		podClique := &grovev1alpha1.PodClique{}
+		if err := r.Client.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: dgd.Namespace}, podClique); err != nil {
+			if errors.IsNotFound(err) {
+				continue
+			}
+			return false, 0, 0, fmt.Errorf("get Grove PodClique %s/%s: %w", dgd.Namespace, resourceName, err)
+		}
+		updated += podClique.Status.UpdatedReplicas
+		desired += podClique.Spec.Replicas
+	}
+	return desired > 0 && updated < desired, updated, desired, nil
+}
+
+func isGroveOnDeleteStrategy(dgd *nvidiacomv1beta1.DynamoGraphDeployment) bool {
+	if dgd == nil {
+		return false
+	}
+	return dgd.Spec.Grove.GetUpdateStrategy() == nvidiacomv1beta1.GroveUpdateStrategyOnDelete
 }
 
 type Resource interface {

@@ -44,6 +44,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	resourcev1 "k8s.io/api/resource/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -74,6 +75,61 @@ func newDynamoGraphDeploymentControllerTestScheme(t testing.TB) *runtime.Scheme 
 		}
 	}
 	return s
+}
+
+func TestUpdateGroveOnDeleteStatus(t *testing.T) {
+	ctx := context.Background()
+	dgd := &v1beta1.DynamoGraphDeployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-dgd", Namespace: "ns"},
+		Spec: v1beta1.DynamoGraphDeploymentSpec{
+			Grove: &v1beta1.GroveSpec{
+				UpdateStrategy: &v1beta1.GroveUpdateStrategy{
+					Type: v1beta1.GroveUpdateStrategyOnDelete,
+				},
+			},
+			Components: []v1beta1.DynamoComponentDeploymentSharedSpec{
+				{
+					ComponentName: "worker",
+					ComponentType: v1beta1.ComponentTypeWorker,
+				},
+			},
+		},
+	}
+	podClique := &grovev1alpha1.PodClique{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-dgd-0-worker",
+			Namespace: "ns",
+		},
+		Spec: grovev1alpha1.PodCliqueSpec{
+			Replicas: 2,
+		},
+		Status: grovev1alpha1.PodCliqueStatus{
+			Replicas:        1,
+			UpdatedReplicas: 1,
+		},
+	}
+	recorder := record.NewFakeRecorder(4)
+	reconciler := &DynamoGraphDeploymentReconciler{
+		Client:   fake.NewClientBuilder().WithScheme(newDynamoGraphDeploymentControllerTestScheme(t)).WithObjects(podClique).Build(),
+		Recorder: recorder,
+	}
+
+	require.NoError(t, reconciler.updateGroveOnDeleteStatus(ctx, dgd))
+	condition := meta.FindStatusCondition(dgd.Status.Conditions, v1beta1.DynamoGraphDeploymentConditionGroveOnDeleteUpdatePending)
+	require.NotNil(t, condition)
+	assert.Equal(t, metav1.ConditionTrue, condition.Status)
+	assert.Contains(t, condition.Message, "1/2 replicas are updated")
+	assert.Contains(t, <-recorder.Events, eventReasonGroveOnDeleteUpdatePending)
+
+	require.NoError(t, reconciler.Client.Get(ctx, types.NamespacedName{Name: podClique.Name, Namespace: podClique.Namespace}, podClique))
+	podClique.Status.Replicas = 2
+	podClique.Status.UpdatedReplicas = 2
+	require.NoError(t, reconciler.Client.Update(ctx, podClique))
+	require.NoError(t, reconciler.updateGroveOnDeleteStatus(ctx, dgd))
+	condition = meta.FindStatusCondition(dgd.Status.Conditions, v1beta1.DynamoGraphDeploymentConditionGroveOnDeleteUpdatePending)
+	require.NotNil(t, condition)
+	assert.Equal(t, metav1.ConditionFalse, condition.Status)
+	assert.Contains(t, <-recorder.Events, eventReasonGroveOnDeleteUpdateCompleted)
 }
 
 func TestDynamoGraphDeploymentReconciler_preserveExistingDCDBackendFramework(t *testing.T) {
