@@ -112,6 +112,9 @@
   `*sharedValidation` receiver. Resource-specific request validators embed that
   base receiver so they can compose shared validation without attaching shared
   methods to a resource-specific receiver.
+- Declare `sharedValidation` in `shared_v1beta1.go`, alongside the primary
+  structural shared-spec validation it supports. Keep its non-validator methods
+  in `shared_helpers.go`; do not create a standalone file just for the receiver.
 - Keep only dependencies and request accumulation needed by shared validation
   on `sharedValidation`. Resource-only state stays on the resource-specific
   receiver.
