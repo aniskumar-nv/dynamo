@@ -12,6 +12,13 @@
 - A parent validates its own scalar fields and calls child validators in API
   declaration order. Slice paths use `Index(i)` and map paths use `Key(key)`;
   sort map keys before emitting errors.
+- Seed root validation with the actual top-level field paths, such as
+  `field.NewPath("metadata")` and `field.NewPath("spec")`, matching upstream
+  Kubernetes validation. Do not invent a synthetic resource path or start
+  child validation from an empty path.
+- Treat embedded `metav1.ObjectMeta` as a structural child. Object metadata
+  and annotation rules belong in `validateObjectMeta`, called with the
+  `metadata` path.
 - Do not name validators after a policy or implementation detail. Start with
   the lowest common API-type ancestor of the fields a rule relates, then keep
   the rule there when it coordinates siblings or needs broad aggregation.
@@ -25,6 +32,16 @@
 ## Validator signatures and context
 
 - Keep structural values first, followed by `fldPath`.
+- Every structural `validate...` function returns
+  `(admission.Warnings, field.ErrorList)`, in that order. Aggregate both in the
+  same parent-to-child traversal; do not implement a second warning traversal.
+- The primary API value and `fldPath` passed to a validator are non-nil
+  invariants and must be documented on the function. Do not add defensive nil
+  checks for required validator arguments.
+- For an optional child pointer, the parent checks for nil and only then calls
+  the child validator. Update parents likewise handle removal before calling a
+  child update validator; when an old value may legitimately be absent, state
+  that explicitly in the child validator's contract.
 - Pass up to three ancestor-derived contextual values as direct, typed
   parameters.
 - If a validator needs four or more such values, use one final, sparse,
@@ -38,13 +55,22 @@
   API reader/client, feature configuration, and caller identity. Do not store
   the current API node, field path, derived traversal data, warnings, or
   accumulated errors on the receiver.
+- Dependencies required by a validation path, including its context and
+  manager/client, are non-nil construction invariants. Document and satisfy
+  those invariants at the boundary; do not add nil fallbacks inside helpers.
 - Update validators take `new`, `old`, and `fldPath` as their structural
   inputs. Apply the same direct-context/typed-options threshold afterward.
+- When otherwise identical Go type names from another API version need a
+  distinct validator, suffix the type name with the version, for example
+  `validateVolumeMountV1alpha1`; do not prefix the version.
+- Use the standard `k8s.io/utils/ptr` helpers such as `ptr.Deref` and
+  `ptr.Equal` for simple pointer defaults and equality. Do not add one-line
+  dereference or pointer-comparison helpers.
 
 ## Errors, warnings, and compatibility
 
-- All `validate...` functions return `field.ErrorList`; do not return `error`,
-  use `errors.Join`, or build field paths with `fmt.Sprintf`.
+- All `validate...` functions return warnings and `field.ErrorList`; do not
+  return `error`, use `errors.Join`, or build field paths with `fmt.Sprintf`.
 - Use typed Kubernetes errors (`field.Required`, `field.Invalid`,
   `field.Forbidden`, `field.NotSupported`, and immutable-field validation).
   The admission boundary converts the final error list to an API invalid error.
