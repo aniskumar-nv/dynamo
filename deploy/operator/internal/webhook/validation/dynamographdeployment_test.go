@@ -192,7 +192,7 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			validator := NewDynamoGraphDeploymentValidator(nil, tt.groveEnabled)
+			validator := newDynamoGraphDeploymentTestValidator(t, tt.groveEnabled)
 			_, err := validator.Validate(context.Background(), tt.deployment)
 			assertBetaValidationError(t, err, tt.wantErr)
 		})
@@ -282,7 +282,7 @@ func TestDynamoGraphDeploymentValidator_GroveSchedulingMatrix(t *testing.T) {
 			deployment := newBetaDGDForValidation()
 			tt.mutate(deployment)
 
-			validator := NewDynamoGraphDeploymentValidator(nil, tt.groveEnabled)
+			validator := newDynamoGraphDeploymentTestValidator(t, tt.groveEnabled)
 			_, err := validator.Validate(context.Background(), deployment)
 			assertBetaValidationError(t, err, tt.wantErr)
 		})
@@ -301,7 +301,7 @@ func TestDynamoGraphDeploymentValidator_ValidateAggregatesErrors(t *testing.T) {
 		consts.KubeAnnotationDynamoKubeDiscoveryMode:     "bad-mode",
 	}
 
-	validator := NewDynamoGraphDeploymentValidator(nil, true)
+	validator := newDynamoGraphDeploymentTestValidator(t, true)
 	_, err := validator.Validate(context.Background(), deployment)
 	for _, wantErr := range []string{
 		"metadata.annotations[nvidia.com/dynamo-operator-origin-version]",
@@ -368,7 +368,7 @@ func TestDynamoGraphDeploymentValidator_AnnotationMatrix(t *testing.T) {
 			deployment := newBetaDGDForValidation()
 			deployment.Annotations = map[string]string{tt.annotation: tt.value}
 
-			validator := NewDynamoGraphDeploymentValidator(nil, true)
+			validator := newDynamoGraphDeploymentTestValidator(t, true)
 			_, err := validator.Validate(context.Background(), deployment)
 			assertBetaValidationError(t, err, tt.wantErr)
 		})
@@ -477,7 +477,7 @@ func TestDynamoGraphDeploymentValidator_ValidateAlphaCompatibility(t *testing.T)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			deployment := betaDGDFromAlpha(t, tt.mutate)
-			validator := NewDynamoGraphDeploymentValidator(nil, true)
+			validator := newDynamoGraphDeploymentTestValidator(t, true)
 			_, err := validator.Validate(context.Background(), deployment)
 			assertBetaValidationError(t, err, tt.wantErr)
 		})
@@ -515,7 +515,7 @@ func TestDynamoGraphDeploymentValidator_ValidateAlphaCompatibilityAdditionalEdge
 			}
 		})
 
-		validator := NewDynamoGraphDeploymentValidator(nil, true)
+		validator := newDynamoGraphDeploymentTestValidator(t, true)
 		_, err := validator.Validate(context.Background(), deployment)
 		assertBetaValidationError(t, err, "")
 	})
@@ -525,7 +525,7 @@ func TestDynamoGraphDeploymentValidator_ValidateAlphaCompatibilityAdditionalEdge
 			dgd.Spec.PVCs = []nvidiacomv1alpha1.PVC{{}}
 		})
 
-		validator := NewDynamoGraphDeploymentValidator(nil, true)
+		validator := newDynamoGraphDeploymentTestValidator(t, true)
 		_, err := validator.Validate(context.Background(), deployment)
 		assertBetaValidationError(t, err, "")
 	})
@@ -539,7 +539,7 @@ func TestDynamoGraphDeploymentValidator_ValidateAlphaCompatibilityAdditionalEdge
 			}
 		})
 
-		validator := NewDynamoGraphDeploymentValidator(nil, true)
+		validator := newDynamoGraphDeploymentTestValidator(t, true)
 		_, err := validator.Validate(context.Background(), deployment)
 		assertBetaValidationError(t, err, "")
 	})
@@ -554,7 +554,7 @@ func TestDynamoGraphDeploymentValidator_ValidateAlphaCompatibilityWarnings(t *te
 		service.Autoscaling = &nvidiacomv1alpha1.Autoscaling{Enabled: true}
 	})
 
-	validator := NewDynamoGraphDeploymentValidator(nil, true)
+	validator := newDynamoGraphDeploymentTestValidator(t, true)
 	warnings, err := validator.Validate(context.Background(), deployment)
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
@@ -672,7 +672,7 @@ func TestDynamoGraphDeploymentValidator_ValidateConvertedAlphaResourceSemantics(
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			deployment := betaDGDFromAlpha(t, tt.mutate)
-			validator := NewDynamoGraphDeploymentValidator(nil, true)
+			validator := newDynamoGraphDeploymentTestValidator(t, true)
 			_, err := validator.Validate(context.Background(), deployment)
 			assertBetaValidationError(t, err, tt.wantErr)
 		})
@@ -742,7 +742,7 @@ func TestDynamoGraphDeploymentValidator_RestartMatrix(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			deployment := betaDGDWithSpec(tt.mutate)
-			validator := NewDynamoGraphDeploymentValidator(nil, true)
+			validator := newDynamoGraphDeploymentTestValidator(t, true)
 			_, err := validator.Validate(context.Background(), deployment)
 			assertBetaValidationError(t, err, tt.wantErr)
 		})
@@ -860,7 +860,12 @@ func TestDynamoGraphDeploymentValidator_TopologyMatrix(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			deployment := betaDGDWithSpec(tt.mutate)
-			validator := NewDynamoGraphDeploymentValidator(tt.mgr, true)
+			mgr := tt.mgr
+			if mgr == nil {
+				mgr = topologyManager
+				deployment.Generation = 2
+			}
+			validator := NewDynamoGraphDeploymentValidator(mgr, true)
 			_, err := validator.Validate(context.Background(), deployment)
 			assertBetaValidationError(t, err, tt.wantErr)
 		})
@@ -1010,7 +1015,12 @@ func TestDynamoGraphDeploymentValidator_KvTransferPolicyMatrix(t *testing.T) {
 			if tt.mutateDGD != nil {
 				tt.mutateDGD(deployment)
 			}
-			validator := NewDynamoGraphDeploymentValidator(tt.mgr, true)
+			mgr := tt.mgr
+			if mgr == nil {
+				mgr = topologyManager
+				deployment.Generation = 2
+			}
+			validator := NewDynamoGraphDeploymentValidator(mgr, true)
 			_, err := validator.Validate(context.Background(), deployment)
 			assertBetaValidationError(t, err, tt.wantErr)
 		})
@@ -1151,7 +1161,7 @@ func TestDynamoGraphDeploymentValidator_GMSFailoverMatrix(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			deployment := newBetaDGDForValidation()
 			tt.mutate(deployment)
-			validator := NewDynamoGraphDeploymentValidator(nil, true)
+			validator := newDynamoGraphDeploymentTestValidator(t, true)
 			_, err := validator.Validate(context.Background(), deployment)
 			assertBetaValidationError(t, err, tt.wantErr)
 		})
@@ -1255,6 +1265,17 @@ func TestDynamoGraphDeploymentValidator_ValidateUpdate(t *testing.T) {
 			wantErr: "spec.topologyConstraint: Invalid value",
 		},
 		{
+			name: "spec topology constraint removal is immutable",
+			oldDGD: betaDGDWithSpec(func(spec *nvidiacomv1beta1.DynamoGraphDeploymentSpec) {
+				spec.TopologyConstraint = &nvidiacomv1beta1.SpecTopologyConstraint{
+					ClusterTopologyName: "grove-topology",
+					PackDomain:          "rack",
+				}
+			}),
+			newDGD:  newBetaDGDForValidation(),
+			wantErr: "spec.topologyConstraint: Invalid value",
+		},
+		{
 			name: "unchanged topology constraints are allowed",
 			oldDGD: betaDGDWithWorker(func(worker *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec) {
 				worker.TopologyConstraint = &nvidiacomv1beta1.TopologyConstraint{PackDomain: "rack"}
@@ -1284,6 +1305,17 @@ func TestDynamoGraphDeploymentValidator_ValidateUpdate(t *testing.T) {
 			wantErr: "spec.components[1].topologyConstraint: Invalid value",
 		},
 		{
+			name: "component topology constraint removal is immutable",
+			oldDGD: betaDGDWithSpec(func(spec *nvidiacomv1beta1.DynamoGraphDeploymentSpec) {
+				spec.TopologyConstraint = &nvidiacomv1beta1.SpecTopologyConstraint{ClusterTopologyName: "grove-topology"}
+				spec.Components[1].TopologyConstraint = &nvidiacomv1beta1.TopologyConstraint{PackDomain: "rack"}
+			}),
+			newDGD: betaDGDWithSpec(func(spec *nvidiacomv1beta1.DynamoGraphDeploymentSpec) {
+				spec.TopologyConstraint = &nvidiacomv1beta1.SpecTopologyConstraint{ClusterTopologyName: "grove-topology"}
+			}),
+			wantErr: "spec.components[1].topologyConstraint: Invalid value",
+		},
+		{
 			name:   "kv transfer policy is immutable",
 			oldDGD: newBetaDGDForValidation(),
 			newDGD: betaDGDWithKvTransferPolicy(&nvidiacomv1beta1.KvTransferPolicy{
@@ -1305,11 +1337,28 @@ func TestDynamoGraphDeploymentValidator_ValidateUpdate(t *testing.T) {
 			}),
 		},
 		{
+			name: "kv transfer policy removal is immutable",
+			oldDGD: betaDGDWithKvTransferPolicy(&nvidiacomv1beta1.KvTransferPolicy{
+				LabelKey: "topology.kubernetes.io/zone",
+				Domain:   "zone",
+			}),
+			newDGD:  newBetaDGDForValidation(),
+			wantErr: "spec.experimental.kvTransferPolicy: Invalid value",
+		},
+		{
 			name:   "inter-pod GMS layout is immutable",
 			oldDGD: newBetaDGDForValidation(),
 			newDGD: betaDGDWithWorker(func(worker *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec) {
 				enableBetaInterPodGMS(worker)
 			}),
+			wantErr: "spec.components[1].experimental.gpuMemoryService.mode: Invalid value",
+		},
+		{
+			name: "inter-pod GMS layout removal is immutable",
+			oldDGD: betaDGDWithWorker(func(worker *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec) {
+				enableBetaInterPodGMS(worker)
+			}),
+			newDGD:  newBetaDGDForValidation(),
 			wantErr: "spec.components[1].experimental.gpuMemoryService.mode: Invalid value",
 		},
 		{
@@ -1321,6 +1370,15 @@ func TestDynamoGraphDeploymentValidator_ValidateUpdate(t *testing.T) {
 				enableBetaInterPodGMS(worker)
 				enableBetaInterPodFailover(worker, 1)
 			}),
+			wantErr: "spec.components[1].experimental.failover: Invalid value",
+		},
+		{
+			name: "inter-pod failover removal is immutable",
+			oldDGD: betaDGDWithWorker(func(worker *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec) {
+				enableBetaInterPodGMS(worker)
+				enableBetaInterPodFailover(worker, 1)
+			}),
+			newDGD:  newBetaDGDForValidation(),
 			wantErr: "spec.components[1].experimental.failover: Invalid value",
 		},
 		{
@@ -1450,8 +1508,8 @@ func TestDynamoGraphDeploymentValidator_ValidateUpdate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			validator := NewDynamoGraphDeploymentValidator(nil, true)
-			warnings, err := validator.ValidateUpdate(tt.oldDGD, tt.newDGD, tt.userInfo, tt.principal)
+			validator := newDynamoGraphDeploymentTestValidator(t, true)
+			warnings, err := validator.ValidateUpdate(context.Background(), tt.oldDGD, tt.newDGD, tt.userInfo, tt.principal)
 			assertBetaValidationError(t, err, tt.wantErr)
 			if tt.wantWarns && len(warnings) == 0 {
 				t.Fatal("ValidateUpdate() expected warnings but got none")
@@ -1474,9 +1532,10 @@ func TestValidateDynamoGraphDeploymentFieldPaths(t *testing.T) {
 			},
 		},
 	}
-	validation := &dynamoGraphDeploymentValidation{ctx: context.Background()}
+	validation := &dynamoGraphDeploymentValidation{ctx: context.Background(), mgr: newGroveTopologyTestManager(t)}
 
-	assertFieldPaths(t, validation.validateDynamoGraphDeployment(dgd), []string{
+	errs := validation.validateDynamoGraphDeployment(dgd)
+	assertFieldPaths(t, errs, []string{
 		"metadata.annotations[nvidia.com/dynamo-operator-origin-version]",
 		"metadata.annotations[nvidia.com/vllm-distributed-executor-backend]",
 		"metadata.annotations[nvidia.com/dynamo-kube-discovery-mode]",
@@ -1507,9 +1566,10 @@ func TestValidateDynamoComponentDeploymentSharedSpecFieldPaths(t *testing.T) {
 		SharedMemorySize: &sharedMemorySize,
 		FrontendSidecar:  &frontendSidecar,
 	}
-	validation := &dynamoGraphDeploymentValidation{ctx: context.Background()}
+	validation := &dynamoGraphDeploymentValidation{ctx: context.Background(), mgr: newGroveTopologyTestManager(t)}
 
-	assertFieldPaths(t, validation.validateDynamoComponentDeploymentSharedSpec(spec, field.NewPath("spec", "components").Index(0), false), []string{
+	errs := validation.validateDynamoComponentDeploymentSharedSpec(spec, field.NewPath("spec", "components").Index(0), false)
+	assertFieldPaths(t, errs, []string{
 		"spec.components[0].podTemplate.spec.containers[1].image",
 		"spec.components[0].podTemplate.spec.initContainers[0].image",
 		"spec.components[0].podTemplate.metadata.annotations[nvidia.com/vllm-distributed-executor-backend]",
@@ -1524,13 +1584,14 @@ func TestValidateDynamoComponentDeploymentSharedSpecFieldPaths(t *testing.T) {
 }
 
 func TestValidateDynamoComponentDeploymentSharedSpecFrontendSidecar(t *testing.T) {
-	validation := &dynamoGraphDeploymentValidation{ctx: context.Background()}
+	validation := &dynamoGraphDeploymentValidation{ctx: context.Background(), mgr: newGroveTopologyTestManager(t)}
 	componentPath := field.NewPath("spec", "components").Index(0)
 
 	t.Run("requires pod template", func(t *testing.T) {
 		name := "frontend"
 		spec := &nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec{FrontendSidecar: &name}
-		assertFieldPaths(t, validation.validateDynamoComponentDeploymentSharedSpec(spec, componentPath, true), []string{
+		errs := validation.validateDynamoComponentDeploymentSharedSpec(spec, componentPath, true)
+		assertFieldPaths(t, errs, []string{
 			"spec.components[0].podTemplate.spec.containers",
 		})
 	})
@@ -1541,7 +1602,8 @@ func TestValidateDynamoComponentDeploymentSharedSpecFrontendSidecar(t *testing.T
 			PodTemplate:     &corev1.PodTemplateSpec{},
 			FrontendSidecar: &name,
 		}
-		assertFieldPaths(t, validation.validateDynamoComponentDeploymentSharedSpec(spec, componentPath, true), []string{
+		errs := validation.validateDynamoComponentDeploymentSharedSpec(spec, componentPath, true)
+		assertFieldPaths(t, errs, []string{
 			"spec.components[0].frontendSidecar",
 		})
 	})
@@ -1554,73 +1616,94 @@ func TestValidateDynamoComponentDeploymentSharedSpecFrontendSidecar(t *testing.T
 			},
 			FrontendSidecar: &name,
 		}
-		assertFieldPaths(t, validation.validateDynamoComponentDeploymentSharedSpec(spec, componentPath, true), nil)
+		errs := validation.validateDynamoComponentDeploymentSharedSpec(spec, componentPath, true)
+		assertFieldPaths(t, errs, nil)
 	})
 }
 
 func TestValidateComponentCheckpointJobConfigFieldPaths(t *testing.T) {
-	validation := &dynamoGraphDeploymentValidation{}
+	validation := &dynamoGraphDeploymentValidation{ctx: context.Background(), mgr: newGroveTopologyTestManager(t)}
 	fldPath := field.NewPath("spec", "components").Index(0).Child("experimental", "checkpoint", "job")
 	job := &nvidiacomv1beta1.ComponentCheckpointJobConfig{GMSClientContainers: []string{"saver"}}
 
-	assertFieldPaths(t, validation.validateComponentCheckpointJobConfig(job, fldPath, nil), []string{
+	errs := validation.validateComponentCheckpointJobConfig(job, fldPath, nil)
+	assertFieldPaths(t, errs, []string{
 		"spec.components[0].experimental.checkpoint.job.gmsClientContainers",
 	})
-	assertFieldPaths(t, validation.validateComponentCheckpointJobConfig(
+	errs = validation.validateComponentCheckpointJobConfig(
 		job,
 		fldPath,
 		&nvidiacomv1beta1.GPUMemoryServiceSpec{Mode: nvidiacomv1beta1.GMSModeInterPod},
-	), []string{"spec.components[0].experimental.checkpoint.job.gmsClientContainers"})
-	assertFieldPaths(t, validation.validateComponentCheckpointJobConfig(
+	)
+	assertFieldPaths(t, errs, []string{"spec.components[0].experimental.checkpoint.job.gmsClientContainers"})
+	errs = validation.validateComponentCheckpointJobConfig(
 		job,
 		fldPath,
 		&nvidiacomv1beta1.GPUMemoryServiceSpec{Mode: nvidiacomv1beta1.GMSModeIntraPod},
-	), nil)
-	assertFieldPaths(t, validation.validateComponentCheckpointJobConfig(
+	)
+	assertFieldPaths(t, errs, nil)
+	errs = validation.validateComponentCheckpointJobConfig(
 		&nvidiacomv1beta1.ComponentCheckpointJobConfig{},
 		fldPath,
 		nil,
-	), nil)
+	)
+	assertFieldPaths(t, errs, nil)
 }
 
-func TestValidateV1Alpha1FrontendSidecarSpecFieldPaths(t *testing.T) {
+func TestValidateFrontendSidecarSpecV1alpha1FieldPaths(t *testing.T) {
+	validation := &dynamoGraphDeploymentValidation{ctx: context.Background(), mgr: newGroveTopologyTestManager(t)}
 	fldPath := field.NewPath("spec", "services").Key("frontend").Child("frontendSidecar")
 	frontendSidecar := &nvidiacomv1alpha1.FrontendSidecarSpec{Image: "frontend:latest"}
-	assertFieldPaths(t, validateV1Alpha1FrontendSidecarSpec(frontendSidecar, fldPath, nil), nil)
-	assertFieldPaths(t, validateV1Alpha1FrontendSidecarSpec(
+	errs := validation.validateFrontendSidecarSpecV1alpha1(frontendSidecar, fldPath, nil)
+	assertFieldPaths(t, errs, nil)
+	errs = validation.validateFrontendSidecarSpecV1alpha1(
 		frontendSidecar,
 		fldPath,
 		&nvidiacomv1alpha1.ExtraPodSpec{PodSpec: &corev1.PodSpec{}},
-	), nil)
-	assertFieldPaths(t, validateV1Alpha1FrontendSidecarSpec(
+	)
+	assertFieldPaths(t, errs, nil)
+	errs = validation.validateFrontendSidecarSpecV1alpha1(
 		frontendSidecar,
 		fldPath,
 		&nvidiacomv1alpha1.ExtraPodSpec{PodSpec: &corev1.PodSpec{
 			Containers: []corev1.Container{{Name: consts.FrontendSidecarContainerName}},
 		}},
-	), []string{"spec.services[frontend].frontendSidecar"})
+	)
+	assertFieldPaths(t, errs, []string{"spec.services[frontend].frontendSidecar"})
 }
 
-func TestDynamoGraphDeploymentValidationRejectsNilObjects(t *testing.T) {
-	validator := NewDynamoGraphDeploymentValidator(nil, false)
-	_, err := validator.Validate(context.Background(), nil)
-	assertBetaValidationError(t, err, "dynamoGraphDeployment: Required value: must not be nil")
+func TestValidateDynamoComponentDeploymentSharedSpecV1alpha1WarningsAndErrors(t *testing.T) {
+	legacyNamespace := "legacy"
+	spec := &nvidiacomv1alpha1.DynamoComponentDeploymentSharedSpec{
+		DynamoNamespace: &legacyNamespace,
+		Annotations: map[string]string{
+			consts.KubeAnnotationVLLMDistributedExecutorBackend: "invalid",
+		},
+	}
 
-	_, err = validator.ValidateUpdate(nil, nil, nil, "")
-	statusErr, ok := err.(*k8serrors.StatusError)
-	if !ok {
-		t.Fatalf("ValidateUpdate() error = %T %v, want typed Kubernetes invalid error", err, err)
+	//nolint:staticcheck // SA1019: Intentionally testing the deprecated compatibility warning.
+	spec.Autoscaling = &nvidiacomv1alpha1.Autoscaling{Enabled: true}
+	fldPath := field.NewPath("spec", "services").Key("worker")
+	validation := &dynamoGraphDeploymentValidation{ctx: context.Background(), mgr: newGroveTopologyTestManager(t)}
+
+	errs := validation.validateDynamoComponentDeploymentSharedSpecV1alpha1(spec, fldPath, "replacement")
+	if len(validation.warnings) != 2 {
+		t.Fatalf("warnings = %v, want 2 compatibility warnings", validation.warnings)
 	}
-	if got := len(statusErr.ErrStatus.Details.Causes); got != 2 {
-		t.Fatalf("ValidateUpdate() causes = %d, want 2", got)
+	if !strings.Contains(validation.warnings[0], "spec.services[worker].dynamoNamespace") ||
+		!strings.Contains(validation.warnings[1], "spec.services[worker].autoscaling") {
+		t.Fatalf("warnings = %v, want structural field paths", validation.warnings)
 	}
+	assertFieldPaths(t, errs, []string{
+		"spec.services[worker].annotations[nvidia.com/vllm-distributed-executor-backend]",
+	})
 }
 
 func TestDynamoGraphDeploymentConversionFailureIsFatal(t *testing.T) {
 	dgd := newBetaDGDForValidation()
 	dgd.Spec.Components = append(dgd.Spec.Components, dgd.Spec.Components[0])
 
-	validator := NewDynamoGraphDeploymentValidator(nil, true)
+	validator := newDynamoGraphDeploymentTestValidator(t, true)
 	_, err := validator.Validate(context.Background(), dgd)
 	if err == nil || !strings.Contains(err.Error(), "failed to reconstruct compatibility view") {
 		t.Fatalf("Validate() error = %v, want fatal conversion error", err)
@@ -1827,6 +1910,11 @@ type fakeManager struct {
 
 func (m *fakeManager) GetClient() client.Client { return m.client }
 func (m *fakeManager) GetConfig() *rest.Config  { return m.config }
+
+func newDynamoGraphDeploymentTestValidator(t *testing.T, groveEnabled bool) *DynamoGraphDeploymentValidator {
+	t.Helper()
+	return NewDynamoGraphDeploymentValidator(newGroveTopologyTestManager(t), groveEnabled)
+}
 
 func newGroveTopologyTestManager(t *testing.T, objects ...runtime.Object) ctrl.Manager {
 	t.Helper()

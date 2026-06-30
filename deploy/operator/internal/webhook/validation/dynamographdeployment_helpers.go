@@ -18,7 +18,6 @@
 package validation
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -34,7 +33,7 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+	k8sptr "k8s.io/utils/ptr"
 )
 
 const (
@@ -53,6 +52,16 @@ type clusterTopologyInfo struct {
 	domains     []string
 }
 
+func (v *dynamoGraphDeploymentValidation) warn(message string) {
+	v.warnings = append(v.warnings, message)
+}
+
+func (v *dynamoGraphDeploymentValidation) warnf(format string, args ...any) {
+	v.warn(fmt.Sprintf(format, args...))
+}
+
+// invalidDynamoGraphDeploymentError converts allErrs for dgd into an API error.
+// dgd must not be nil.
 func invalidDynamoGraphDeploymentError(
 	dgd *nvidiacomv1beta1.DynamoGraphDeployment,
 	allErrs field.ErrorList,
@@ -60,23 +69,11 @@ func invalidDynamoGraphDeploymentError(
 	if len(allErrs) == 0 {
 		return nil
 	}
-	name := ""
-	if dgd != nil {
-		name = dgd.Name
-	}
-	return k8serrors.NewInvalid(nvidiacomv1beta1.DynamoGraphDeploymentGVK.GroupKind(), name, allErrs)
+	return k8serrors.NewInvalid(nvidiacomv1beta1.DynamoGraphDeploymentGVK.GroupKind(), dgd.Name, allErrs)
 }
 
-func warningsForDynamoGraphDeploymentUpdate(
-	newDGD *nvidiacomv1beta1.DynamoGraphDeployment,
-	oldDGD *nvidiacomv1beta1.DynamoGraphDeployment,
-) admission.Warnings {
-	if newDGD == nil || oldDGD == nil || newDGD.Spec.BackendFramework == oldDGD.Spec.BackendFramework {
-		return nil
-	}
-	return admission.Warnings{"Changing spec.backendFramework may cause unexpected behavior"}
-}
-
+// alphaDynamoGraphDeploymentForValidation reconstructs the compatibility view.
+// dgd must not be nil.
 func alphaDynamoGraphDeploymentForValidation(
 	dgd *nvidiacomv1beta1.DynamoGraphDeployment,
 ) (*nvidiacomv1alpha1.DynamoGraphDeployment, error) {
@@ -125,49 +122,10 @@ func sortedV1Alpha1ServiceNames(
 	return names
 }
 
-func warningsForV1Alpha1DynamoGraphDeployment(
-	dgd *nvidiacomv1alpha1.DynamoGraphDeployment,
-) admission.Warnings {
-	if dgd == nil || !hasV1Alpha1CompatibilityFields(dgd) {
-		return nil
-	}
-
-	warnings := admission.Warnings{}
-	servicesPath := field.NewPath("spec", "services")
-	for _, serviceName := range sortedV1Alpha1ServiceNames(dgd.Spec.Services) {
-		service := dgd.Spec.Services[serviceName]
-		if service == nil {
-			continue
-		}
-		servicePath := servicesPath.Key(serviceName)
-		if service.DynamoNamespace != nil && *service.DynamoNamespace != "" {
-			warnings = append(warnings, fmt.Sprintf(
-				"%s.dynamoNamespace is deprecated and ignored. Value %q will be replaced with %q. Remove this field from your configuration",
-				servicePath,
-				*service.DynamoNamespace,
-				dgd.GetDynamoNamespaceForService(service),
-			))
-		}
-		//nolint:staticcheck // SA1019: Intentionally warning about a deprecated preserved field.
-		if service.Autoscaling != nil {
-			warnings = append(warnings, fmt.Sprintf(
-				"%s.autoscaling is deprecated and ignored. Use DynamoGraphDeploymentScalingAdapter with HPA, KEDA, or Planner for autoscaling instead. See docs/kubernetes/autoscaling.md",
-				servicePath,
-			))
-		}
-	}
-	return warnings
-}
-
+// inferencePoolAvailabilityError checks the InferencePool API.
+// v.ctx and v.mgr must not be nil.
 func (v *dynamoGraphDeploymentValidation) inferencePoolAvailabilityError() error {
-	if v.mgr == nil {
-		return fmt.Errorf("manager is required to detect InferencePool API availability")
-	}
-	ctx := v.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if controllercommon.DetectInferencePoolAvailability(ctx, v.mgr) {
+	if controllercommon.DetectInferencePoolAvailability(v.ctx, v.mgr) {
 		return nil
 	}
 	return fmt.Errorf(
@@ -281,34 +239,6 @@ func componentNameSet(
 	return names
 }
 
-func restartID(restart *nvidiacomv1beta1.Restart) string {
-	if restart == nil {
-		return ""
-	}
-	return restart.ID
-}
-
-func effectiveReplicas(replicas *int32) int32 {
-	if replicas == nil {
-		return 1
-	}
-	return *replicas
-}
-
-func specTopologyConstraintsEqual(a, b *nvidiacomv1beta1.SpecTopologyConstraint) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return a.ClusterTopologyName == b.ClusterTopologyName && a.PackDomain == b.PackDomain
-}
-
-func topologyConstraintsEqual(a, b *nvidiacomv1beta1.TopologyConstraint) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return a.PackDomain == b.PackDomain
-}
-
 func kvTransferPolicyFor(
 	experimental *nvidiacomv1beta1.DynamoGraphDeploymentExperimentalSpec,
 ) *nvidiacomv1beta1.KvTransferPolicy {
@@ -319,36 +249,26 @@ func kvTransferPolicyFor(
 }
 
 func kvTransferPoliciesEqual(a, b *nvidiacomv1beta1.KvTransferPolicy) bool {
-	if a == nil || b == nil {
-		return a == b
+	if b == nil {
+		return false
 	}
 	return a.ClusterTopologyName == b.ClusterTopologyName &&
 		a.LabelKey == b.LabelKey &&
 		a.Domain == b.Domain &&
 		effectiveKvTransferEnforcement(a) == effectiveKvTransferEnforcement(b) &&
-		preferredWeightsEqual(a.PreferredWeight, b.PreferredWeight)
+		k8sptr.Equal(a.PreferredWeight, b.PreferredWeight)
 }
 
 func effectiveKvTransferEnforcement(policy *nvidiacomv1beta1.KvTransferPolicy) nvidiacomv1beta1.KvTransferEnforcement {
-	if policy == nil || policy.Enforcement == "" {
+	if policy.Enforcement == "" {
 		return nvidiacomv1beta1.KvTransferEnforcementRequired
 	}
 	return policy.Enforcement
 }
 
-func preferredWeightsEqual(a, b *float32) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
 func gpuMemoryServiceFor(
 	component *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec,
 ) *nvidiacomv1beta1.GPUMemoryServiceSpec {
-	if component == nil {
-		return nil
-	}
 	return gpuMemoryServiceForExperimental(component.Experimental)
 }
 
@@ -362,9 +282,6 @@ func gpuMemoryServiceForExperimental(experimental *nvidiacomv1beta1.Experimental
 func failoverFor(
 	component *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec,
 ) *nvidiacomv1beta1.FailoverSpec {
-	if component == nil {
-		return nil
-	}
 	return failoverForExperimental(component.Experimental)
 }
 
@@ -382,13 +299,6 @@ func effectiveGMSMode(mode nvidiacomv1beta1.GPUMemoryServiceMode) nvidiacomv1bet
 	return mode
 }
 
-func gmsMode(gms *nvidiacomv1beta1.GPUMemoryServiceSpec) nvidiacomv1beta1.GPUMemoryServiceMode {
-	if gms == nil {
-		return ""
-	}
-	return gms.Mode
-}
-
 func isInterPodGMS(gms *nvidiacomv1beta1.GPUMemoryServiceSpec) bool {
 	return gms != nil && effectiveGMSMode(gms.Mode) == nvidiacomv1beta1.GMSModeInterPod
 }
@@ -398,9 +308,6 @@ func isInterPodFailover(failover *nvidiacomv1beta1.FailoverSpec) bool {
 }
 
 func effectiveNumShadows(failover *nvidiacomv1beta1.FailoverSpec) int32 {
-	if failover == nil {
-		return 0
-	}
 	if failover.NumShadows < 1 {
 		return 1
 	}

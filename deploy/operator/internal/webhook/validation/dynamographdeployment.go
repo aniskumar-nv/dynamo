@@ -33,7 +33,9 @@ import (
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	k8sptr "k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
@@ -45,6 +47,7 @@ type DynamoGraphDeploymentValidator struct {
 }
 
 // NewDynamoGraphDeploymentValidator creates a validator for v1beta1 DynamoGraphDeployment.
+// mgr must not be nil.
 func NewDynamoGraphDeploymentValidator(
 	mgr ctrl.Manager,
 	groveEnabled bool,
@@ -63,6 +66,7 @@ type dynamoGraphDeploymentValidation struct {
 	groveEnabled      bool
 	userInfo          *authenticationv1.UserInfo
 	operatorPrincipal string
+	warnings          admission.Warnings
 }
 
 type dynamoGraphDeploymentSpecValidationOptions struct {
@@ -73,6 +77,7 @@ type dynamoGraphDeploymentSpecValidationOptions struct {
 }
 
 // Validate performs stateless validation on the v1beta1 DynamoGraphDeployment.
+// ctx and deployment must not be nil.
 func (v *DynamoGraphDeploymentValidator) Validate(
 	ctx context.Context,
 	deployment *nvidiacomv1beta1.DynamoGraphDeployment,
@@ -84,71 +89,47 @@ func (v *DynamoGraphDeploymentValidator) Validate(
 	}
 
 	allErrs := validation.validateDynamoGraphDeployment(deployment)
-	if deployment == nil {
-		return nil, invalidDynamoGraphDeploymentError(nil, allErrs)
-	}
 	alpha, err := alphaDynamoGraphDeploymentForValidation(deployment)
 	if err != nil {
 		return nil, fmt.Errorf("cannot validate preserved v1alpha1 DynamoGraphDeployment fields: %w", err)
 	}
-	allErrs = append(allErrs, validateV1Alpha1DynamoGraphDeployment(alpha)...)
-	warnings := warningsForV1Alpha1DynamoGraphDeployment(alpha)
+	allErrs = append(allErrs, validation.validateDynamoGraphDeploymentV1alpha1(alpha)...)
 
-	return warnings, invalidDynamoGraphDeploymentError(deployment, allErrs)
+	return validation.warnings, invalidDynamoGraphDeploymentError(deployment, allErrs)
 }
 
 // ValidateUpdate performs stateful validation comparing old and new v1beta1 DGD objects.
+// ctx, oldDGD, and newDGD must not be nil.
 // If userInfo is nil, replica changes for DGDSA-enabled components fail closed.
 func (v *DynamoGraphDeploymentValidator) ValidateUpdate(
+	ctx context.Context,
 	oldDGD *nvidiacomv1beta1.DynamoGraphDeployment,
 	newDGD *nvidiacomv1beta1.DynamoGraphDeployment,
 	userInfo *authenticationv1.UserInfo,
 	operatorPrincipal string,
 ) (admission.Warnings, error) {
 	validation := &dynamoGraphDeploymentValidation{
+		ctx:               ctx,
 		mgr:               v.mgr,
 		groveEnabled:      v.groveEnabled,
 		userInfo:          userInfo,
 		operatorPrincipal: operatorPrincipal,
 	}
 
-	warnings := warningsForDynamoGraphDeploymentUpdate(newDGD, oldDGD)
 	allErrs := validation.validateDynamoGraphDeploymentUpdate(newDGD, oldDGD)
-	return warnings, invalidDynamoGraphDeploymentError(newDGD, allErrs)
+	return validation.warnings, invalidDynamoGraphDeploymentError(newDGD, allErrs)
 }
 
+// validateDynamoGraphDeployment validates dgd. dgd must not be nil.
 func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeployment(
 	dgd *nvidiacomv1beta1.DynamoGraphDeployment,
 ) field.ErrorList {
-	if dgd == nil {
-		return field.ErrorList{field.Required(field.NewPath("dynamoGraphDeployment"), "must not be nil")}
-	}
-
 	allErrs := field.ErrorList{}
-	annotationsPath := field.NewPath("metadata", "annotations")
-	if value, exists := dgd.Annotations[consts.KubeAnnotationDynamoOperatorOriginVersion]; exists {
-		if _, err := semver.NewVersion(value); err != nil {
-			allErrs = append(allErrs, field.Invalid(
-				annotationsPath.Key(consts.KubeAnnotationDynamoOperatorOriginVersion),
-				value,
-				"must be valid semver",
-			))
-		}
-	}
-	if value, invalid := invalidVLLMDistributedExecutorBackendAnnotation(dgd.Annotations); invalid {
-		allErrs = append(allErrs, field.Invalid(
-			annotationsPath.Key(consts.KubeAnnotationVLLMDistributedExecutorBackend),
-			value,
-			`must be "mp" or "ray"`,
-		))
-	}
-	if value, exists := dgd.Annotations[consts.KubeAnnotationDynamoKubeDiscoveryMode]; exists && value != "pod" && value != "container" {
-		allErrs = append(allErrs, field.NotSupported(
-			annotationsPath.Key(consts.KubeAnnotationDynamoKubeDiscoveryMode),
-			value,
-			[]string{"pod", "container"},
-		))
-	}
+	allErrs = append(allErrs, v.validateObjectMeta(
+		&dgd.ObjectMeta,
+		field.NewPath("metadata"),
+		hasIntraPodFailover(&dgd.Spec),
+	)...)
 
 	grovePathway, grovePathwayRequirement := v.grovePathwayForDynamoGraphDeployment(dgd)
 	specOpts := dynamoGraphDeploymentSpecValidationOptions{
@@ -159,10 +140,45 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeployment(
 	}
 	allErrs = append(allErrs, v.validateDynamoGraphDeploymentSpec(&dgd.Spec, field.NewPath("spec"), specOpts)...)
 
-	if hasIntraPodFailover(&dgd.Spec) && dgd.Annotations[consts.KubeAnnotationDynamoKubeDiscoveryMode] != "container" {
+	return allErrs
+}
+
+// validateObjectMeta validates objectMeta. objectMeta and fldPath must not be nil.
+func (v *dynamoGraphDeploymentValidation) validateObjectMeta(
+	objectMeta *metav1.ObjectMeta,
+	fldPath *field.Path,
+	hasIntraPodFailover bool,
+) field.ErrorList {
+	allErrs := field.ErrorList{}
+	annotationsPath := fldPath.Child("annotations")
+	if value, exists := objectMeta.Annotations[consts.KubeAnnotationDynamoOperatorOriginVersion]; exists {
+		if _, err := semver.NewVersion(value); err != nil {
+			allErrs = append(allErrs, field.Invalid(
+				annotationsPath.Key(consts.KubeAnnotationDynamoOperatorOriginVersion),
+				value,
+				"must be valid semver",
+			))
+		}
+	}
+	if value, invalid := invalidVLLMDistributedExecutorBackendAnnotation(objectMeta.Annotations); invalid {
+		allErrs = append(allErrs, field.Invalid(
+			annotationsPath.Key(consts.KubeAnnotationVLLMDistributedExecutorBackend),
+			value,
+			`must be "mp" or "ray"`,
+		))
+	}
+	if value, exists := objectMeta.Annotations[consts.KubeAnnotationDynamoKubeDiscoveryMode]; exists && value != "pod" && value != "container" {
+		allErrs = append(allErrs, field.NotSupported(
+			annotationsPath.Key(consts.KubeAnnotationDynamoKubeDiscoveryMode),
+			value,
+			[]string{"pod", "container"},
+		))
+	}
+
+	if hasIntraPodFailover && objectMeta.Annotations[consts.KubeAnnotationDynamoKubeDiscoveryMode] != "container" {
 		allErrs = append(allErrs, field.Invalid(
 			annotationsPath.Key(consts.KubeAnnotationDynamoKubeDiscoveryMode),
-			dgd.Annotations[consts.KubeAnnotationDynamoKubeDiscoveryMode],
+			objectMeta.Annotations[consts.KubeAnnotationDynamoKubeDiscoveryMode],
 			`must be "container" when intra-pod failover is configured`,
 		))
 	}
@@ -170,18 +186,27 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeployment(
 	return allErrs
 }
 
-func validateV1Alpha1DynamoGraphDeployment(
+// validateDynamoGraphDeploymentV1alpha1 validates dgd. dgd must not be nil.
+func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentV1alpha1(
 	dgd *nvidiacomv1alpha1.DynamoGraphDeployment,
 ) field.ErrorList {
-	if dgd == nil || !hasV1Alpha1CompatibilityFields(dgd) {
+	if !hasV1Alpha1CompatibilityFields(dgd) {
 		return nil
 	}
-	return validateV1Alpha1DynamoGraphDeploymentSpec(&dgd.Spec, field.NewPath("spec"))
+	return v.validateDynamoGraphDeploymentSpecV1alpha1(
+		&dgd.Spec,
+		field.NewPath("spec"),
+		dgd.Name,
+		dgd.Namespace,
+	)
 }
 
-func validateV1Alpha1DynamoGraphDeploymentSpec(
+// validateDynamoGraphDeploymentSpecV1alpha1 validates spec. spec and fldPath must not be nil.
+func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentSpecV1alpha1(
 	spec *nvidiacomv1alpha1.DynamoGraphDeploymentSpec,
 	fldPath *field.Path,
+	dgdName string,
+	dgdNamespace string,
 ) field.ErrorList {
 	allErrs := field.ErrorList{}
 	servicesPath := fldPath.Child("services")
@@ -192,16 +217,39 @@ func validateV1Alpha1DynamoGraphDeploymentSpec(
 			allErrs = append(allErrs, field.Required(servicePath, "must not be null"))
 			continue
 		}
-		allErrs = append(allErrs, validateV1Alpha1DynamoComponentDeploymentSharedSpec(service, servicePath)...)
+		dynamoNamespace := nvidiacomv1alpha1.ComputeDynamoNamespace(service.GlobalDynamoNamespace, dgdNamespace, dgdName)
+		allErrs = append(allErrs, v.validateDynamoComponentDeploymentSharedSpecV1alpha1(
+			service,
+			servicePath,
+			dynamoNamespace,
+		)...)
 	}
 	return allErrs
 }
 
-func validateV1Alpha1DynamoComponentDeploymentSharedSpec(
+// validateDynamoComponentDeploymentSharedSpecV1alpha1 validates spec. spec and fldPath must not be nil.
+func (v *dynamoGraphDeploymentValidation) validateDynamoComponentDeploymentSharedSpecV1alpha1(
 	spec *nvidiacomv1alpha1.DynamoComponentDeploymentSharedSpec,
 	fldPath *field.Path,
+	dynamoNamespace string,
 ) field.ErrorList {
 	allErrs := field.ErrorList{}
+	if spec.DynamoNamespace != nil && *spec.DynamoNamespace != "" {
+		v.warnf(
+			"%s.dynamoNamespace is deprecated and ignored. Value %q will be replaced with %q. Remove this field from your configuration",
+			fldPath,
+			*spec.DynamoNamespace,
+			dynamoNamespace,
+		)
+	}
+	//nolint:staticcheck // SA1019: Intentionally warning about a deprecated preserved field.
+	if spec.Autoscaling != nil {
+		v.warnf(
+			"%s.autoscaling is deprecated and ignored. Use DynamoGraphDeploymentScalingAdapter with HPA, KEDA, or Planner for autoscaling instead. See docs/kubernetes/autoscaling.md",
+			fldPath,
+		)
+	}
+
 	if value, invalid := invalidVLLMDistributedExecutorBackendAnnotation(spec.Annotations); invalid {
 		allErrs = append(allErrs, field.Invalid(
 			fldPath.Child("annotations").Key(consts.KubeAnnotationVLLMDistributedExecutorBackend),
@@ -212,13 +260,13 @@ func validateV1Alpha1DynamoComponentDeploymentSharedSpec(
 
 	volumeMountsPath := fldPath.Child("volumeMounts")
 	for i := range spec.VolumeMounts {
-		allErrs = append(allErrs, validateV1Alpha1VolumeMount(&spec.VolumeMounts[i], volumeMountsPath.Index(i))...)
+		allErrs = append(allErrs, v.validateVolumeMountV1alpha1(&spec.VolumeMounts[i], volumeMountsPath.Index(i))...)
 	}
 	if spec.Ingress != nil {
-		allErrs = append(allErrs, validateV1Alpha1IngressSpec(spec.Ingress, fldPath.Child("ingress"))...)
+		allErrs = append(allErrs, v.validateIngressSpecV1alpha1(spec.Ingress, fldPath.Child("ingress"))...)
 	}
 	if spec.FrontendSidecar != nil {
-		allErrs = append(allErrs, validateV1Alpha1FrontendSidecarSpec(
+		allErrs = append(allErrs, v.validateFrontendSidecarSpecV1alpha1(
 			spec.FrontendSidecar,
 			fldPath.Child("frontendSidecar"),
 			spec.ExtraPodSpec,
@@ -227,7 +275,8 @@ func validateV1Alpha1DynamoComponentDeploymentSharedSpec(
 	return allErrs
 }
 
-func validateV1Alpha1VolumeMount(
+// validateVolumeMountV1alpha1 validates volumeMount. volumeMount and fldPath must not be nil.
+func (v *dynamoGraphDeploymentValidation) validateVolumeMountV1alpha1(
 	volumeMount *nvidiacomv1alpha1.VolumeMount,
 	fldPath *field.Path,
 ) field.ErrorList {
@@ -240,7 +289,8 @@ func validateV1Alpha1VolumeMount(
 	)}
 }
 
-func validateV1Alpha1IngressSpec(
+// validateIngressSpecV1alpha1 validates ingress. ingress and fldPath must not be nil.
+func (v *dynamoGraphDeploymentValidation) validateIngressSpecV1alpha1(
 	ingress *nvidiacomv1alpha1.IngressSpec,
 	fldPath *field.Path,
 ) field.ErrorList {
@@ -250,12 +300,14 @@ func validateV1Alpha1IngressSpec(
 	return field.ErrorList{field.Required(fldPath.Child("host"), "is required when ingress is enabled")}
 }
 
-func validateV1Alpha1FrontendSidecarSpec(
+// validateFrontendSidecarSpecV1alpha1 validates frontendSidecar. frontendSidecar and fldPath must not be nil.
+// extraPodSpec may be nil.
+func (v *dynamoGraphDeploymentValidation) validateFrontendSidecarSpecV1alpha1(
 	frontendSidecar *nvidiacomv1alpha1.FrontendSidecarSpec,
 	fldPath *field.Path,
 	extraPodSpec *nvidiacomv1alpha1.ExtraPodSpec,
 ) field.ErrorList {
-	if frontendSidecar == nil || extraPodSpec == nil || extraPodSpec.PodSpec == nil {
+	if extraPodSpec == nil || extraPodSpec.PodSpec == nil {
 		return nil
 	}
 	if hasContainerNamed(extraPodSpec.PodSpec.Containers, consts.FrontendSidecarContainerName) {
@@ -268,6 +320,7 @@ func validateV1Alpha1FrontendSidecarSpec(
 	return nil
 }
 
+// validateDynamoGraphDeploymentSpec validates spec. spec and fldPath must not be nil.
 func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentSpec(
 	spec *nvidiacomv1beta1.DynamoGraphDeploymentSpec,
 	fldPath *field.Path,
@@ -365,7 +418,7 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentSpec(
 
 			var topologyInfo *clusterTopologyInfo
 			if len(topologyErrs) == 0 && spec.TopologyConstraint.ClusterTopologyName != "" &&
-				v.mgr != nil && opts.generation <= 1 && opts.grovePathway {
+				opts.generation <= 1 && opts.grovePathway {
 				var err error
 				topologyInfo, err = v.readGroveClusterTopology(spec.TopologyConstraint.ClusterTopologyName)
 				if err != nil {
@@ -415,6 +468,7 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentSpec(
 	return allErrs
 }
 
+// validateRestart validates restart. restart and fldPath must not be nil.
 func (v *dynamoGraphDeploymentValidation) validateRestart(
 	restart *nvidiacomv1beta1.Restart,
 	fldPath *field.Path,
@@ -426,6 +480,7 @@ func (v *dynamoGraphDeploymentValidation) validateRestart(
 	return v.validateRestartStrategy(restart.Strategy, fldPath.Child("strategy"), components)
 }
 
+// validateRestartStrategy validates strategy. strategy and fldPath must not be nil.
 func (v *dynamoGraphDeploymentValidation) validateRestartStrategy(
 	strategy *nvidiacomv1beta1.RestartStrategy,
 	fldPath *field.Path,
@@ -460,6 +515,8 @@ func (v *dynamoGraphDeploymentValidation) validateRestartStrategy(
 	return allErrs
 }
 
+// validateSpecTopologyConstraint validates constraint. constraint and fldPath must not be nil.
+// topologyInfo may be nil when live topology validation is not applicable.
 func (v *dynamoGraphDeploymentValidation) validateSpecTopologyConstraint(
 	constraint *nvidiacomv1beta1.SpecTopologyConstraint,
 	fldPath *field.Path,
@@ -478,6 +535,8 @@ func (v *dynamoGraphDeploymentValidation) validateSpecTopologyConstraint(
 	)}
 }
 
+// validateTopologyConstraint validates constraint. constraint, specConstraint, and fldPath must not be nil.
+// topologyInfo may be nil when live topology validation is not applicable.
 func (v *dynamoGraphDeploymentValidation) validateTopologyConstraint(
 	constraint *nvidiacomv1beta1.TopologyConstraint,
 	fldPath *field.Path,
@@ -511,6 +570,7 @@ func (v *dynamoGraphDeploymentValidation) validateTopologyConstraint(
 	return nil
 }
 
+// validateDynamoGraphDeploymentExperimentalSpec validates experimental. experimental and fldPath must not be nil.
 func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentExperimentalSpec(
 	experimental *nvidiacomv1beta1.DynamoGraphDeploymentExperimentalSpec,
 	fldPath *field.Path,
@@ -530,6 +590,7 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentExperimen
 	)
 }
 
+// validateKvTransferPolicy validates policy. policy and fldPath must not be nil.
 func (v *dynamoGraphDeploymentValidation) validateKvTransferPolicy(
 	policy *nvidiacomv1beta1.KvTransferPolicy,
 	fldPath *field.Path,
@@ -546,7 +607,7 @@ func (v *dynamoGraphDeploymentValidation) validateKvTransferPolicy(
 	if !grovePathway {
 		allErrs = append(allErrs, field.Forbidden(namePath, grovePathwayRequirement))
 	}
-	if len(allErrs) != 0 || v.mgr == nil || generation > 1 {
+	if len(allErrs) != 0 || generation > 1 {
 		return allErrs
 	}
 
@@ -568,6 +629,7 @@ func (v *dynamoGraphDeploymentValidation) validateKvTransferPolicy(
 	return allErrs
 }
 
+// validateDynamoComponentDeploymentSharedSpec validates spec. spec and fldPath must not be nil.
 func (v *dynamoGraphDeploymentValidation) validateDynamoComponentDeploymentSharedSpec(
 	spec *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec,
 	fldPath *field.Path,
@@ -670,6 +732,7 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoComponentDeploymentShare
 	return allErrs
 }
 
+// validateExperimentalSpec validates experimental. experimental and fldPath must not be nil.
 func (v *dynamoGraphDeploymentValidation) validateExperimentalSpec(
 	experimental *nvidiacomv1beta1.ExperimentalSpec,
 	fldPath *field.Path,
@@ -712,6 +775,7 @@ func (v *dynamoGraphDeploymentValidation) validateExperimentalSpec(
 	return allErrs
 }
 
+// validateGPUMemoryServiceSpec validates gms. gms and fldPath must not be nil.
 func (v *dynamoGraphDeploymentValidation) validateGPUMemoryServiceSpec(
 	gms *nvidiacomv1beta1.GPUMemoryServiceSpec,
 	fldPath *field.Path,
@@ -741,6 +805,8 @@ func (v *dynamoGraphDeploymentValidation) validateGPUMemoryServiceSpec(
 	return allErrs
 }
 
+// validateFailoverSpec validates failover. failover and fldPath must not be nil.
+// gms may be nil because failover validates that sibling relationship.
 func (v *dynamoGraphDeploymentValidation) validateFailoverSpec(
 	failover *nvidiacomv1beta1.FailoverSpec,
 	fldPath *field.Path,
@@ -793,6 +859,8 @@ func (v *dynamoGraphDeploymentValidation) validateFailoverSpec(
 	return allErrs
 }
 
+// validateComponentCheckpointConfig validates checkpoint. checkpoint and fldPath must not be nil.
+// gms may be nil because checkpoint validates that sibling relationship.
 func (v *dynamoGraphDeploymentValidation) validateComponentCheckpointConfig(
 	checkpoint *nvidiacomv1beta1.ComponentCheckpointConfig,
 	fldPath *field.Path,
@@ -804,6 +872,8 @@ func (v *dynamoGraphDeploymentValidation) validateComponentCheckpointConfig(
 	return v.validateComponentCheckpointJobConfig(checkpoint.Job, fldPath.Child("job"), gms)
 }
 
+// validateComponentCheckpointJobConfig validates job. job and fldPath must not be nil.
+// gms may be nil because the job validates that sibling relationship.
 func (v *dynamoGraphDeploymentValidation) validateComponentCheckpointJobConfig(
 	job *nvidiacomv1beta1.ComponentCheckpointJobConfig,
 	fldPath *field.Path,
@@ -827,21 +897,12 @@ func (v *dynamoGraphDeploymentValidation) validateComponentCheckpointJobConfig(
 	return nil
 }
 
+// validateDynamoGraphDeploymentUpdate validates an update. newDGD and oldDGD must not be nil.
 func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentUpdate(
 	newDGD *nvidiacomv1beta1.DynamoGraphDeployment,
 	oldDGD *nvidiacomv1beta1.DynamoGraphDeployment,
 ) field.ErrorList {
 	allErrs := field.ErrorList{}
-	if newDGD == nil {
-		allErrs = append(allErrs, field.Required(field.NewPath("newDynamoGraphDeployment"), "must not be nil"))
-	}
-	if oldDGD == nil {
-		allErrs = append(allErrs, field.Required(field.NewPath("oldDynamoGraphDeployment"), "must not be nil"))
-	}
-	if len(allErrs) != 0 {
-		return allErrs
-	}
-
 	allErrs = append(allErrs, v.validateDynamoGraphDeploymentSpecUpdate(
 		&newDGD.Spec,
 		&oldDGD.Spec,
@@ -851,8 +912,8 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentUpdate(
 	if oldDGD.Status.RollingUpdate != nil {
 		phase := oldDGD.Status.RollingUpdate.Phase
 		if phase == nvidiacomv1beta1.RollingUpdatePhasePending || phase == nvidiacomv1beta1.RollingUpdatePhaseInProgress {
-			oldID := restartID(oldDGD.Spec.Restart)
-			newID := restartID(newDGD.Spec.Restart)
+			oldID := k8sptr.Deref(oldDGD.Spec.Restart, nvidiacomv1beta1.Restart{}).ID
+			newID := k8sptr.Deref(newDGD.Spec.Restart, nvidiacomv1beta1.Restart{}).ID
 			if oldID != newID {
 				allErrs = append(allErrs, field.Invalid(
 					field.NewPath("spec", "restart", "id"),
@@ -865,6 +926,7 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentUpdate(
 	return allErrs
 }
 
+// validateDynamoGraphDeploymentSpecUpdate validates a spec update. newSpec, oldSpec, and fldPath must not be nil.
 func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentSpecUpdate(
 	newSpec *nvidiacomv1beta1.DynamoGraphDeploymentSpec,
 	oldSpec *nvidiacomv1beta1.DynamoGraphDeploymentSpec,
@@ -908,6 +970,7 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentSpecUpdat
 	}
 
 	if newSpec.BackendFramework != oldSpec.BackendFramework {
+		v.warn("Changing spec.backendFramework may cause unexpected behavior")
 		allErrs = append(allErrs, field.Invalid(
 			fldPath.Child("backendFramework"),
 			newSpec.BackendFramework,
@@ -915,23 +978,40 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentSpecUpdat
 		))
 	}
 
-	allErrs = append(allErrs, v.validateSpecTopologyConstraintUpdate(
-		newSpec.TopologyConstraint,
-		oldSpec.TopologyConstraint,
-		fldPath.Child("topologyConstraint"),
-	)...)
+	topologyPath := fldPath.Child("topologyConstraint")
+	if newSpec.TopologyConstraint != nil {
+		allErrs = append(allErrs, v.validateSpecTopologyConstraintUpdate(
+			newSpec.TopologyConstraint,
+			oldSpec.TopologyConstraint,
+			topologyPath,
+		)...)
+	} else if oldSpec.TopologyConstraint != nil {
+		allErrs = append(allErrs, field.Invalid(
+			topologyPath,
+			newSpec.TopologyConstraint,
+			"is immutable and cannot be added, removed, or changed after creation; delete and recreate the DynamoGraphDeployment to change topology constraints",
+		))
+	}
 
-	if newSpec.Experimental != nil || oldSpec.Experimental != nil {
+	if newSpec.Experimental != nil {
 		allErrs = append(allErrs, v.validateDynamoGraphDeploymentExperimentalSpecUpdate(
 			newSpec.Experimental,
 			oldSpec.Experimental,
 			fldPath.Child("experimental"),
 		)...)
+	} else if oldPolicy := kvTransferPolicyFor(oldSpec.Experimental); oldPolicy != nil {
+		allErrs = append(allErrs, field.Invalid(
+			fldPath.Child("experimental", "kvTransferPolicy"),
+			newSpec.Experimental,
+			"is immutable and cannot be added, removed, or changed after creation; delete and recreate the DynamoGraphDeployment to change the KV transfer policy",
+		))
 	}
 
 	return allErrs
 }
 
+// validateDynamoComponentDeploymentSharedSpecUpdate validates a component update.
+// newComponent, oldComponent, and fldPath must not be nil.
 func (v *dynamoGraphDeploymentValidation) validateDynamoComponentDeploymentSharedSpecUpdate(
 	newComponent *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec,
 	oldComponent *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec,
@@ -940,7 +1020,7 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoComponentDeploymentShare
 ) field.ErrorList {
 	allErrs := field.ErrorList{}
 	if newComponent.ScalingAdapter != nil && !canModifyReplicas &&
-		effectiveReplicas(newComponent.Replicas) != effectiveReplicas(oldComponent.Replicas) {
+		k8sptr.Deref(newComponent.Replicas, int32(1)) != k8sptr.Deref(oldComponent.Replicas, int32(1)) {
 		allErrs = append(allErrs, field.Forbidden(
 			fldPath.Child("replicas"),
 			"cannot be modified directly when scaling adapter is enabled; scale or update the related DynamoGraphDeploymentScalingAdapter instead",
@@ -955,27 +1035,58 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoComponentDeploymentShare
 		))
 	}
 
-	allErrs = append(allErrs, v.validateTopologyConstraintUpdate(
-		newComponent.TopologyConstraint,
-		oldComponent.TopologyConstraint,
-		fldPath.Child("topologyConstraint"),
-	)...)
-	if newComponent.Experimental != nil || oldComponent.Experimental != nil {
+	topologyPath := fldPath.Child("topologyConstraint")
+	if newComponent.TopologyConstraint != nil {
+		allErrs = append(allErrs, v.validateTopologyConstraintUpdate(
+			newComponent.TopologyConstraint,
+			oldComponent.TopologyConstraint,
+			topologyPath,
+		)...)
+	} else if oldComponent.TopologyConstraint != nil {
+		allErrs = append(allErrs, field.Invalid(
+			topologyPath,
+			newComponent.TopologyConstraint,
+			"is immutable and cannot be added, removed, or changed after creation; delete and recreate the DynamoGraphDeployment to change topology constraints",
+		))
+	}
+
+	if newComponent.Experimental != nil {
 		allErrs = append(allErrs, v.validateExperimentalSpecUpdate(
 			newComponent.Experimental,
 			oldComponent.Experimental,
 			fldPath.Child("experimental"),
 		)...)
+	} else if oldComponent.Experimental != nil {
+		oldGMS := gpuMemoryServiceForExperimental(oldComponent.Experimental)
+		if isInterPodGMS(oldGMS) {
+			allErrs = append(allErrs, field.Invalid(
+				fldPath.Child("experimental", "gpuMemoryService", "mode"),
+				nil,
+				"the inter-pod GMS layout cannot be toggled after creation; delete and recreate the DynamoGraphDeployment",
+			))
+		}
+		oldFailover := failoverForExperimental(oldComponent.Experimental)
+		if isInterPodFailover(oldFailover) {
+			allErrs = append(allErrs, field.Invalid(
+				fldPath.Child("experimental", "failover"),
+				nil,
+				"inter-pod GMS failover cannot be toggled after creation; delete and recreate the DynamoGraphDeployment",
+			))
+		}
 	}
 	return allErrs
 }
 
+// validateSpecTopologyConstraintUpdate validates a topology constraint update.
+// newConstraint and fldPath must not be nil; oldConstraint may be nil for an addition.
 func (v *dynamoGraphDeploymentValidation) validateSpecTopologyConstraintUpdate(
 	newConstraint *nvidiacomv1beta1.SpecTopologyConstraint,
 	oldConstraint *nvidiacomv1beta1.SpecTopologyConstraint,
 	fldPath *field.Path,
 ) field.ErrorList {
-	if specTopologyConstraintsEqual(newConstraint, oldConstraint) {
+	if oldConstraint != nil &&
+		newConstraint.ClusterTopologyName == oldConstraint.ClusterTopologyName &&
+		newConstraint.PackDomain == oldConstraint.PackDomain {
 		return nil
 	}
 	return field.ErrorList{field.Invalid(
@@ -985,12 +1096,14 @@ func (v *dynamoGraphDeploymentValidation) validateSpecTopologyConstraintUpdate(
 	)}
 }
 
+// validateTopologyConstraintUpdate validates a topology constraint update.
+// newConstraint and fldPath must not be nil; oldConstraint may be nil for an addition.
 func (v *dynamoGraphDeploymentValidation) validateTopologyConstraintUpdate(
 	newConstraint *nvidiacomv1beta1.TopologyConstraint,
 	oldConstraint *nvidiacomv1beta1.TopologyConstraint,
 	fldPath *field.Path,
 ) field.ErrorList {
-	if topologyConstraintsEqual(newConstraint, oldConstraint) {
+	if oldConstraint != nil && newConstraint.PackDomain == oldConstraint.PackDomain {
 		return nil
 	}
 	return field.ErrorList{field.Invalid(
@@ -1000,18 +1113,30 @@ func (v *dynamoGraphDeploymentValidation) validateTopologyConstraintUpdate(
 	)}
 }
 
+// validateDynamoGraphDeploymentExperimentalSpecUpdate validates an experimental spec update.
+// newExperimental and fldPath must not be nil; oldExperimental may be nil for an addition.
 func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentExperimentalSpecUpdate(
 	newExperimental *nvidiacomv1beta1.DynamoGraphDeploymentExperimentalSpec,
 	oldExperimental *nvidiacomv1beta1.DynamoGraphDeploymentExperimentalSpec,
 	fldPath *field.Path,
 ) field.ErrorList {
-	return v.validateKvTransferPolicyUpdate(
-		kvTransferPolicyFor(newExperimental),
-		kvTransferPolicyFor(oldExperimental),
+	newPolicy := newExperimental.KvTransferPolicy
+	oldPolicy := kvTransferPolicyFor(oldExperimental)
+	if newPolicy != nil {
+		return v.validateKvTransferPolicyUpdate(newPolicy, oldPolicy, fldPath.Child("kvTransferPolicy"))
+	}
+	if oldPolicy == nil {
+		return nil
+	}
+	return field.ErrorList{field.Invalid(
 		fldPath.Child("kvTransferPolicy"),
-	)
+		newPolicy,
+		"is immutable and cannot be added, removed, or changed after creation; delete and recreate the DynamoGraphDeployment to change the KV transfer policy",
+	)}
 }
 
+// validateKvTransferPolicyUpdate validates a policy update.
+// newPolicy and fldPath must not be nil; oldPolicy may be nil for an addition.
 func (v *dynamoGraphDeploymentValidation) validateKvTransferPolicyUpdate(
 	newPolicy *nvidiacomv1beta1.KvTransferPolicy,
 	oldPolicy *nvidiacomv1beta1.KvTransferPolicy,
@@ -1027,23 +1152,25 @@ func (v *dynamoGraphDeploymentValidation) validateKvTransferPolicyUpdate(
 	)}
 }
 
+// validateExperimentalSpecUpdate validates an experimental spec update.
+// newExperimental and fldPath must not be nil; oldExperimental may be nil for an addition.
 func (v *dynamoGraphDeploymentValidation) validateExperimentalSpecUpdate(
 	newExperimental *nvidiacomv1beta1.ExperimentalSpec,
 	oldExperimental *nvidiacomv1beta1.ExperimentalSpec,
 	fldPath *field.Path,
 ) field.ErrorList {
 	allErrs := field.ErrorList{}
-	newGMS := gpuMemoryServiceForExperimental(newExperimental)
+	newGMS := newExperimental.GPUMemoryService
 	oldGMS := gpuMemoryServiceForExperimental(oldExperimental)
 	if isInterPodGMS(newGMS) != isInterPodGMS(oldGMS) {
 		allErrs = append(allErrs, field.Invalid(
 			fldPath.Child("gpuMemoryService", "mode"),
-			gmsMode(newGMS),
+			k8sptr.Deref(newGMS, nvidiacomv1beta1.GPUMemoryServiceSpec{}).Mode,
 			"the inter-pod GMS layout cannot be toggled after creation; delete and recreate the DynamoGraphDeployment",
 		))
 	}
 
-	newFailover := failoverForExperimental(newExperimental)
+	newFailover := newExperimental.Failover
 	oldFailover := failoverForExperimental(oldExperimental)
 	if isInterPodFailover(newFailover) != isInterPodFailover(oldFailover) {
 		allErrs = append(allErrs, field.Invalid(
