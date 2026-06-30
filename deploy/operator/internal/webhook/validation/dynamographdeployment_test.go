@@ -1532,7 +1532,9 @@ func TestValidateDynamoGraphDeploymentFieldPaths(t *testing.T) {
 			},
 		},
 	}
-	validation := &dynamoGraphDeploymentValidation{ctx: context.Background(), mgr: newGroveTopologyTestManager(t)}
+	validation := &dynamoGraphDeploymentValidation{
+		sharedValidation: sharedValidation{ctx: context.Background(), mgr: newGroveTopologyTestManager(t)},
+	}
 
 	errs := validation.validateDynamoGraphDeployment(dgd)
 	assertFieldPaths(t, errs, []string{

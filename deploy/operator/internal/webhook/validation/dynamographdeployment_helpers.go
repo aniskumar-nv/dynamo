@@ -22,7 +22,6 @@ import (
 	"sort"
 	"strings"
 
-	nvidiacomv1alpha1 "github.com/ai-dynamo/dynamo/deploy/operator/api/v1alpha1"
 	nvidiacomv1beta1 "github.com/ai-dynamo/dynamo/deploy/operator/api/v1beta1"
 	"github.com/ai-dynamo/dynamo/deploy/operator/internal/consts"
 	"github.com/ai-dynamo/dynamo/deploy/operator/internal/dynamo"
@@ -44,14 +43,6 @@ type clusterTopologyInfo struct {
 	domains     []string
 }
 
-func (v *dynamoGraphDeploymentValidation) warn(message string) {
-	v.warnings = append(v.warnings, message)
-}
-
-func (v *dynamoGraphDeploymentValidation) warnf(format string, args ...any) {
-	v.warn(fmt.Sprintf(format, args...))
-}
-
 // invalidDynamoGraphDeploymentError converts allErrs for dgd into an API error.
 // dgd must not be nil.
 func invalidDynamoGraphDeploymentError(
@@ -62,56 +53,6 @@ func invalidDynamoGraphDeploymentError(
 		return nil
 	}
 	return k8serrors.NewInvalid(nvidiacomv1beta1.DynamoGraphDeploymentGVK.GroupKind(), dgd.Name, allErrs)
-}
-
-// alphaDynamoGraphDeploymentForValidation reconstructs the compatibility view.
-// dgd must not be nil.
-func alphaDynamoGraphDeploymentForValidation(
-	dgd *nvidiacomv1beta1.DynamoGraphDeployment,
-) (*nvidiacomv1alpha1.DynamoGraphDeployment, error) {
-	alpha := &nvidiacomv1alpha1.DynamoGraphDeployment{}
-	if err := alpha.ConvertFrom(dgd); err != nil {
-		return nil, fmt.Errorf("failed to reconstruct compatibility view: %w", err)
-	}
-	return alpha, nil
-}
-
-func hasV1Alpha1CompatibilityFields(dgd *nvidiacomv1alpha1.DynamoGraphDeployment) bool {
-	if len(dgd.Spec.PVCs) > 0 {
-		return true
-	}
-	for _, service := range dgd.Spec.Services {
-		if service == nil {
-			return true
-		}
-		hasDeprecatedAutoscaling := false
-		//nolint:staticcheck // SA1019: Intentionally checking deprecated fields preserved by conversion.
-		if service.Autoscaling != nil {
-			hasDeprecatedAutoscaling = true
-		}
-		if service.Ingress != nil ||
-			len(service.Annotations) > 0 ||
-			service.DynamoNamespace != nil ||
-			hasDeprecatedAutoscaling ||
-			len(service.VolumeMounts) > 0 ||
-			service.SharedMemory != nil ||
-			service.FrontendSidecar != nil ||
-			(service.GPUMemoryService != nil && !service.GPUMemoryService.Enabled) {
-			return true
-		}
-	}
-	return false
-}
-
-func sortedV1Alpha1ServiceNames(
-	services map[string]*nvidiacomv1alpha1.DynamoComponentDeploymentSharedSpec,
-) []string {
-	names := make([]string, 0, len(services))
-	for name := range services {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
 }
 
 func (v *dynamoGraphDeploymentValidation) readGroveClusterTopology(name string) (*clusterTopologyInfo, error) {

@@ -774,7 +774,7 @@ func TestValidateDynamoComponentDeploymentSharedSpecFieldPaths(t *testing.T) {
 		SharedMemorySize: &sharedMemorySize,
 		FrontendSidecar:  &frontendSidecar,
 	}
-	validation := &dynamoGraphDeploymentValidation{ctx: context.Background(), mgr: newGroveTopologyTestManager(t)}
+	validation := &sharedValidation{ctx: context.Background(), mgr: newGroveTopologyTestManager(t)}
 
 	errs := validation.validateDynamoComponentDeploymentSharedSpec(spec, field.NewPath("spec", "components").Index(0), false)
 	assertFieldPaths(t, errs, []string{
@@ -792,7 +792,7 @@ func TestValidateDynamoComponentDeploymentSharedSpecFieldPaths(t *testing.T) {
 }
 
 func TestValidateDynamoComponentDeploymentSharedSpecFrontendSidecar(t *testing.T) {
-	validation := &dynamoGraphDeploymentValidation{ctx: context.Background(), mgr: newGroveTopologyTestManager(t)}
+	validation := &sharedValidation{ctx: context.Background(), mgr: newGroveTopologyTestManager(t)}
 	componentPath := field.NewPath("spec", "components").Index(0)
 
 	t.Run("requires pod template", func(t *testing.T) {
@@ -830,7 +830,7 @@ func TestValidateDynamoComponentDeploymentSharedSpecFrontendSidecar(t *testing.T
 }
 
 func TestValidateComponentCheckpointJobConfigFieldPaths(t *testing.T) {
-	validation := &dynamoGraphDeploymentValidation{ctx: context.Background(), mgr: newGroveTopologyTestManager(t)}
+	validation := &sharedValidation{ctx: context.Background(), mgr: newGroveTopologyTestManager(t)}
 	fldPath := field.NewPath("spec", "components").Index(0).Child("experimental", "checkpoint", "job")
 	job := &nvidiacomv1beta1.ComponentCheckpointJobConfig{GMSClientContainers: []string{"saver"}}
 
@@ -859,7 +859,7 @@ func TestValidateComponentCheckpointJobConfigFieldPaths(t *testing.T) {
 }
 
 func TestValidateFrontendSidecarSpecV1alpha1FieldPaths(t *testing.T) {
-	validation := &dynamoGraphDeploymentValidation{ctx: context.Background(), mgr: newGroveTopologyTestManager(t)}
+	validation := &sharedValidation{ctx: context.Background(), mgr: newGroveTopologyTestManager(t)}
 	fldPath := field.NewPath("spec", "services").Key("frontend").Child("frontendSidecar")
 	frontendSidecar := &nvidiacomv1alpha1.FrontendSidecarSpec{Image: "frontend:latest"}
 	errs := validation.validateFrontendSidecarSpecV1alpha1(frontendSidecar, fldPath, nil)
@@ -892,7 +892,7 @@ func TestValidateDynamoComponentDeploymentSharedSpecV1alpha1WarningsAndErrors(t 
 	//nolint:staticcheck // SA1019: Intentionally testing the deprecated compatibility warning.
 	spec.Autoscaling = &nvidiacomv1alpha1.Autoscaling{Enabled: true}
 	fldPath := field.NewPath("spec", "services").Key("worker")
-	validation := &dynamoGraphDeploymentValidation{ctx: context.Background(), mgr: newGroveTopologyTestManager(t)}
+	validation := &sharedValidation{ctx: context.Background(), mgr: newGroveTopologyTestManager(t)}
 
 	errs := validation.validateDynamoComponentDeploymentSharedSpecV1alpha1(spec, fldPath, "replacement")
 	if len(validation.warnings) != 2 {

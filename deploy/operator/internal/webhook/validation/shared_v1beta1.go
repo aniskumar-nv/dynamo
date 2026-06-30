@@ -31,7 +31,7 @@ import (
 )
 
 // validateDynamoComponentDeploymentSharedSpec validates spec. spec and fldPath must not be nil.
-func (v *dynamoGraphDeploymentValidation) validateDynamoComponentDeploymentSharedSpec(
+func (v *sharedValidation) validateDynamoComponentDeploymentSharedSpec(
 	spec *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec,
 	fldPath *field.Path,
 	grovePathway bool,
@@ -135,7 +135,7 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoComponentDeploymentShare
 
 // validateTopologyConstraint validates constraint. constraint, specConstraint, and fldPath must not be nil.
 // topologyInfo may be nil when live topology validation is not applicable.
-func (v *dynamoGraphDeploymentValidation) validateTopologyConstraint(
+func (v *sharedValidation) validateTopologyConstraint(
 	constraint *nvidiacomv1beta1.TopologyConstraint,
 	fldPath *field.Path,
 	specConstraint *nvidiacomv1beta1.SpecTopologyConstraint,
@@ -169,7 +169,7 @@ func (v *dynamoGraphDeploymentValidation) validateTopologyConstraint(
 }
 
 // validateExperimentalSpec validates experimental. experimental and fldPath must not be nil.
-func (v *dynamoGraphDeploymentValidation) validateExperimentalSpec(
+func (v *sharedValidation) validateExperimentalSpec(
 	experimental *nvidiacomv1beta1.ExperimentalSpec,
 	fldPath *field.Path,
 	componentType nvidiacomv1beta1.ComponentType,
@@ -212,7 +212,7 @@ func (v *dynamoGraphDeploymentValidation) validateExperimentalSpec(
 }
 
 // validateGPUMemoryServiceSpec validates gms. gms and fldPath must not be nil.
-func (v *dynamoGraphDeploymentValidation) validateGPUMemoryServiceSpec(
+func (v *sharedValidation) validateGPUMemoryServiceSpec(
 	gms *nvidiacomv1beta1.GPUMemoryServiceSpec,
 	fldPath *field.Path,
 	componentType nvidiacomv1beta1.ComponentType,
@@ -243,7 +243,7 @@ func (v *dynamoGraphDeploymentValidation) validateGPUMemoryServiceSpec(
 
 // validateFailoverSpec validates failover. failover and fldPath must not be nil.
 // gms may be nil because failover validates that sibling relationship.
-func (v *dynamoGraphDeploymentValidation) validateFailoverSpec(
+func (v *sharedValidation) validateFailoverSpec(
 	failover *nvidiacomv1beta1.FailoverSpec,
 	fldPath *field.Path,
 	gms *nvidiacomv1beta1.GPUMemoryServiceSpec,
@@ -297,7 +297,7 @@ func (v *dynamoGraphDeploymentValidation) validateFailoverSpec(
 
 // validateComponentCheckpointConfig validates checkpoint. checkpoint and fldPath must not be nil.
 // gms may be nil because checkpoint validates that sibling relationship.
-func (v *dynamoGraphDeploymentValidation) validateComponentCheckpointConfig(
+func (v *sharedValidation) validateComponentCheckpointConfig(
 	checkpoint *nvidiacomv1beta1.ComponentCheckpointConfig,
 	fldPath *field.Path,
 	gms *nvidiacomv1beta1.GPUMemoryServiceSpec,
@@ -310,7 +310,7 @@ func (v *dynamoGraphDeploymentValidation) validateComponentCheckpointConfig(
 
 // validateComponentCheckpointJobConfig validates job. job and fldPath must not be nil.
 // gms may be nil because the job validates that sibling relationship.
-func (v *dynamoGraphDeploymentValidation) validateComponentCheckpointJobConfig(
+func (v *sharedValidation) validateComponentCheckpointJobConfig(
 	job *nvidiacomv1beta1.ComponentCheckpointJobConfig,
 	fldPath *field.Path,
 	gms *nvidiacomv1beta1.GPUMemoryServiceSpec,
@@ -335,7 +335,7 @@ func (v *dynamoGraphDeploymentValidation) validateComponentCheckpointJobConfig(
 
 // validateDynamoComponentDeploymentSharedSpecUpdate validates a component update.
 // newComponent, oldComponent, and fldPath must not be nil.
-func (v *dynamoGraphDeploymentValidation) validateDynamoComponentDeploymentSharedSpecUpdate(
+func (v *sharedValidation) validateDynamoComponentDeploymentSharedSpecUpdate(
 	newComponent *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec,
 	oldComponent *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec,
 	fldPath *field.Path,
@@ -402,7 +402,7 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoComponentDeploymentShare
 
 // validateTopologyConstraintUpdate validates a topology constraint update.
 // newConstraint and fldPath must not be nil; oldConstraint may be nil for an addition.
-func (v *dynamoGraphDeploymentValidation) validateTopologyConstraintUpdate(
+func (v *sharedValidation) validateTopologyConstraintUpdate(
 	newConstraint *nvidiacomv1beta1.TopologyConstraint,
 	oldConstraint *nvidiacomv1beta1.TopologyConstraint,
 	fldPath *field.Path,
@@ -419,7 +419,7 @@ func (v *dynamoGraphDeploymentValidation) validateTopologyConstraintUpdate(
 
 // validateExperimentalSpecUpdate validates an experimental spec update.
 // newExperimental and fldPath must not be nil; oldExperimental may be nil for an addition.
-func (v *dynamoGraphDeploymentValidation) validateExperimentalSpecUpdate(
+func (v *sharedValidation) validateExperimentalSpecUpdate(
 	newExperimental *nvidiacomv1beta1.ExperimentalSpec,
 	oldExperimental *nvidiacomv1beta1.ExperimentalSpec,
 	fldPath *field.Path,

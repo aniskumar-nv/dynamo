@@ -27,7 +27,7 @@ import (
 
 // inferencePoolAvailabilityError checks the InferencePool API.
 // v.ctx and v.mgr must not be nil.
-func (v *dynamoGraphDeploymentValidation) inferencePoolAvailabilityError() error {
+func (v *sharedValidation) inferencePoolAvailabilityError() error {
 	if controllercommon.DetectInferencePoolAvailability(v.ctx, v.mgr) {
 		return nil
 	}

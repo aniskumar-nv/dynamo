@@ -23,7 +23,6 @@ import (
 	"sort"
 
 	semver "github.com/Masterminds/semver/v3"
-	nvidiacomv1alpha1 "github.com/ai-dynamo/dynamo/deploy/operator/api/v1alpha1"
 	nvidiacomv1beta1 "github.com/ai-dynamo/dynamo/deploy/operator/api/v1beta1"
 	"github.com/ai-dynamo/dynamo/deploy/operator/internal/consts"
 	"github.com/ai-dynamo/dynamo/deploy/operator/internal/dynamo"
@@ -55,15 +54,13 @@ func NewDynamoGraphDeploymentValidator(
 	}
 }
 
-// dynamoGraphDeploymentValidation carries immutable request-wide dependencies.
+// dynamoGraphDeploymentValidation carries DGD-specific request state.
 // API values and derived traversal state remain explicit validator arguments.
 type dynamoGraphDeploymentValidation struct {
-	ctx               context.Context
-	mgr               ctrl.Manager
+	sharedValidation
 	groveEnabled      bool
 	userInfo          *authenticationv1.UserInfo
 	operatorPrincipal string
-	warnings          admission.Warnings
 }
 
 type dynamoGraphDeploymentSpecValidationOptions struct {
@@ -80,9 +77,8 @@ func (v *DynamoGraphDeploymentValidator) Validate(
 	deployment *nvidiacomv1beta1.DynamoGraphDeployment,
 ) (admission.Warnings, error) {
 	validation := &dynamoGraphDeploymentValidation{
-		ctx:          ctx,
-		mgr:          v.mgr,
-		groveEnabled: v.groveEnabled,
+		sharedValidation: sharedValidation{ctx: ctx, mgr: v.mgr},
+		groveEnabled:     v.groveEnabled,
 	}
 
 	allErrs := validation.validateDynamoGraphDeployment(deployment)
@@ -106,8 +102,7 @@ func (v *DynamoGraphDeploymentValidator) ValidateUpdate(
 	operatorPrincipal string,
 ) (admission.Warnings, error) {
 	validation := &dynamoGraphDeploymentValidation{
-		ctx:               ctx,
-		mgr:               v.mgr,
+		sharedValidation:  sharedValidation{ctx: ctx, mgr: v.mgr},
 		groveEnabled:      v.groveEnabled,
 		userInfo:          userInfo,
 		operatorPrincipal: operatorPrincipal,
@@ -181,140 +176,6 @@ func (v *dynamoGraphDeploymentValidation) validateObjectMeta(
 	}
 
 	return allErrs
-}
-
-// validateDynamoGraphDeploymentV1alpha1 validates dgd. dgd must not be nil.
-func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentV1alpha1(
-	dgd *nvidiacomv1alpha1.DynamoGraphDeployment,
-) field.ErrorList {
-	if !hasV1Alpha1CompatibilityFields(dgd) {
-		return nil
-	}
-	return v.validateDynamoGraphDeploymentSpecV1alpha1(
-		&dgd.Spec,
-		field.NewPath("spec"),
-		dgd.Name,
-		dgd.Namespace,
-	)
-}
-
-// validateDynamoGraphDeploymentSpecV1alpha1 validates spec. spec and fldPath must not be nil.
-func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentSpecV1alpha1(
-	spec *nvidiacomv1alpha1.DynamoGraphDeploymentSpec,
-	fldPath *field.Path,
-	dgdName string,
-	dgdNamespace string,
-) field.ErrorList {
-	allErrs := field.ErrorList{}
-	servicesPath := fldPath.Child("services")
-	for _, serviceName := range sortedV1Alpha1ServiceNames(spec.Services) {
-		service := spec.Services[serviceName]
-		servicePath := servicesPath.Key(serviceName)
-		if service == nil {
-			allErrs = append(allErrs, field.Required(servicePath, "must not be null"))
-			continue
-		}
-		dynamoNamespace := nvidiacomv1alpha1.ComputeDynamoNamespace(service.GlobalDynamoNamespace, dgdNamespace, dgdName)
-		allErrs = append(allErrs, v.validateDynamoComponentDeploymentSharedSpecV1alpha1(
-			service,
-			servicePath,
-			dynamoNamespace,
-		)...)
-	}
-	return allErrs
-}
-
-// validateDynamoComponentDeploymentSharedSpecV1alpha1 validates spec. spec and fldPath must not be nil.
-func (v *dynamoGraphDeploymentValidation) validateDynamoComponentDeploymentSharedSpecV1alpha1(
-	spec *nvidiacomv1alpha1.DynamoComponentDeploymentSharedSpec,
-	fldPath *field.Path,
-	dynamoNamespace string,
-) field.ErrorList {
-	allErrs := field.ErrorList{}
-	if spec.DynamoNamespace != nil && *spec.DynamoNamespace != "" {
-		v.warnf(
-			"%s.dynamoNamespace is deprecated and ignored. Value %q will be replaced with %q. Remove this field from your configuration",
-			fldPath,
-			*spec.DynamoNamespace,
-			dynamoNamespace,
-		)
-	}
-	//nolint:staticcheck // SA1019: Intentionally warning about a deprecated preserved field.
-	if spec.Autoscaling != nil {
-		v.warnf(
-			"%s.autoscaling is deprecated and ignored. Use DynamoGraphDeploymentScalingAdapter with HPA, KEDA, or Planner for autoscaling instead. See docs/kubernetes/autoscaling.md",
-			fldPath,
-		)
-	}
-
-	if value, invalid := invalidVLLMDistributedExecutorBackendAnnotation(spec.Annotations); invalid {
-		allErrs = append(allErrs, field.Invalid(
-			fldPath.Child("annotations").Key(consts.KubeAnnotationVLLMDistributedExecutorBackend),
-			value,
-			`must be "mp" or "ray"`,
-		))
-	}
-
-	volumeMountsPath := fldPath.Child("volumeMounts")
-	for i := range spec.VolumeMounts {
-		allErrs = append(allErrs, v.validateVolumeMountV1alpha1(&spec.VolumeMounts[i], volumeMountsPath.Index(i))...)
-	}
-	if spec.Ingress != nil {
-		allErrs = append(allErrs, v.validateIngressSpecV1alpha1(spec.Ingress, fldPath.Child("ingress"))...)
-	}
-	if spec.FrontendSidecar != nil {
-		allErrs = append(allErrs, v.validateFrontendSidecarSpecV1alpha1(
-			spec.FrontendSidecar,
-			fldPath.Child("frontendSidecar"),
-			spec.ExtraPodSpec,
-		)...)
-	}
-	return allErrs
-}
-
-// validateVolumeMountV1alpha1 validates volumeMount. volumeMount and fldPath must not be nil.
-func (v *dynamoGraphDeploymentValidation) validateVolumeMountV1alpha1(
-	volumeMount *nvidiacomv1alpha1.VolumeMount,
-	fldPath *field.Path,
-) field.ErrorList {
-	if volumeMount.UseAsCompilationCache || volumeMount.MountPoint != "" {
-		return nil
-	}
-	return field.ErrorList{field.Required(
-		fldPath.Child("mountPoint"),
-		"is required when useAsCompilationCache is false",
-	)}
-}
-
-// validateIngressSpecV1alpha1 validates ingress. ingress and fldPath must not be nil.
-func (v *dynamoGraphDeploymentValidation) validateIngressSpecV1alpha1(
-	ingress *nvidiacomv1alpha1.IngressSpec,
-	fldPath *field.Path,
-) field.ErrorList {
-	if !ingress.Enabled || ingress.Host != "" {
-		return nil
-	}
-	return field.ErrorList{field.Required(fldPath.Child("host"), "is required when ingress is enabled")}
-}
-
-// validateFrontendSidecarSpecV1alpha1 validates frontendSidecar. frontendSidecar and fldPath must not be nil.
-// extraPodSpec may be nil.
-func (v *dynamoGraphDeploymentValidation) validateFrontendSidecarSpecV1alpha1(
-	frontendSidecar *nvidiacomv1alpha1.FrontendSidecarSpec,
-	fldPath *field.Path,
-	extraPodSpec *nvidiacomv1alpha1.ExtraPodSpec,
-) field.ErrorList {
-	if extraPodSpec == nil || extraPodSpec.PodSpec == nil {
-		return nil
-	}
-	if hasContainerNamed(extraPodSpec.PodSpec.Containers, consts.FrontendSidecarContainerName) {
-		return field.ErrorList{field.Invalid(
-			fldPath,
-			frontendSidecar,
-			fmt.Sprintf("cannot inject frontend sidecar: a container named %q already exists in extraPodSpec.containers", consts.FrontendSidecarContainerName),
-		)}
-	}
-	return nil
 }
 
 // validateDynamoGraphDeploymentSpec validates spec. spec and fldPath must not be nil.

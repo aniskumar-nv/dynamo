@@ -30,6 +30,7 @@ import (
 	controllercommon "github.com/ai-dynamo/dynamo/deploy/operator/internal/controller_common"
 	"github.com/ai-dynamo/dynamo/deploy/operator/internal/dynamo/epp"
 	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
@@ -482,6 +483,99 @@ func (v *SharedSpecValidatorV1Alpha1) validateFrontendSidecar() error {
 				"%s: cannot inject frontend sidecar: a container named %q already exists in extraPodSpec.containers",
 				v.fieldPath, consts.FrontendSidecarContainerName)
 		}
+	}
+	return nil
+}
+
+// validateDynamoComponentDeploymentSharedSpecV1alpha1 validates spec. spec and fldPath must not be nil.
+func (v *sharedValidation) validateDynamoComponentDeploymentSharedSpecV1alpha1(
+	spec *nvidiacomv1alpha1.DynamoComponentDeploymentSharedSpec,
+	fldPath *field.Path,
+	dynamoNamespace string,
+) field.ErrorList {
+	allErrs := field.ErrorList{}
+	if spec.DynamoNamespace != nil && *spec.DynamoNamespace != "" {
+		v.warnf(
+			"%s.dynamoNamespace is deprecated and ignored. Value %q will be replaced with %q. Remove this field from your configuration",
+			fldPath,
+			*spec.DynamoNamespace,
+			dynamoNamespace,
+		)
+	}
+	//nolint:staticcheck // SA1019: Intentionally warning about a deprecated preserved field.
+	if spec.Autoscaling != nil {
+		v.warnf(
+			"%s.autoscaling is deprecated and ignored. Use DynamoGraphDeploymentScalingAdapter with HPA, KEDA, or Planner for autoscaling instead. See docs/kubernetes/autoscaling.md",
+			fldPath,
+		)
+	}
+
+	if value, invalid := invalidVLLMDistributedExecutorBackendAnnotation(spec.Annotations); invalid {
+		allErrs = append(allErrs, field.Invalid(
+			fldPath.Child("annotations").Key(consts.KubeAnnotationVLLMDistributedExecutorBackend),
+			value,
+			`must be "mp" or "ray"`,
+		))
+	}
+
+	volumeMountsPath := fldPath.Child("volumeMounts")
+	for i := range spec.VolumeMounts {
+		allErrs = append(allErrs, v.validateVolumeMountV1alpha1(&spec.VolumeMounts[i], volumeMountsPath.Index(i))...)
+	}
+	if spec.Ingress != nil {
+		allErrs = append(allErrs, v.validateIngressSpecV1alpha1(spec.Ingress, fldPath.Child("ingress"))...)
+	}
+	if spec.FrontendSidecar != nil {
+		allErrs = append(allErrs, v.validateFrontendSidecarSpecV1alpha1(
+			spec.FrontendSidecar,
+			fldPath.Child("frontendSidecar"),
+			spec.ExtraPodSpec,
+		)...)
+	}
+	return allErrs
+}
+
+// validateVolumeMountV1alpha1 validates volumeMount. volumeMount and fldPath must not be nil.
+func (v *sharedValidation) validateVolumeMountV1alpha1(
+	volumeMount *nvidiacomv1alpha1.VolumeMount,
+	fldPath *field.Path,
+) field.ErrorList {
+	if volumeMount.UseAsCompilationCache || volumeMount.MountPoint != "" {
+		return nil
+	}
+	return field.ErrorList{field.Required(
+		fldPath.Child("mountPoint"),
+		"is required when useAsCompilationCache is false",
+	)}
+}
+
+// validateIngressSpecV1alpha1 validates ingress. ingress and fldPath must not be nil.
+func (v *sharedValidation) validateIngressSpecV1alpha1(
+	ingress *nvidiacomv1alpha1.IngressSpec,
+	fldPath *field.Path,
+) field.ErrorList {
+	if !ingress.Enabled || ingress.Host != "" {
+		return nil
+	}
+	return field.ErrorList{field.Required(fldPath.Child("host"), "is required when ingress is enabled")}
+}
+
+// validateFrontendSidecarSpecV1alpha1 validates frontendSidecar. frontendSidecar and fldPath must not be nil.
+// extraPodSpec may be nil.
+func (v *sharedValidation) validateFrontendSidecarSpecV1alpha1(
+	frontendSidecar *nvidiacomv1alpha1.FrontendSidecarSpec,
+	fldPath *field.Path,
+	extraPodSpec *nvidiacomv1alpha1.ExtraPodSpec,
+) field.ErrorList {
+	if extraPodSpec == nil || extraPodSpec.PodSpec == nil {
+		return nil
+	}
+	if hasContainerNamed(extraPodSpec.PodSpec.Containers, consts.FrontendSidecarContainerName) {
+		return field.ErrorList{field.Invalid(
+			fldPath,
+			frontendSidecar,
+			fmt.Sprintf("cannot inject frontend sidecar: a container named %q already exists in extraPodSpec.containers", consts.FrontendSidecarContainerName),
+		)}
 	}
 	return nil
 }
