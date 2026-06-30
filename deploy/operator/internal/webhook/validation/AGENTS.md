@@ -40,6 +40,9 @@
   `<owner>_<version>.go` file, for example
   `dynamographdeployment_v1alpha1.go`. Keep validators for API types shared by
   multiple resources in the corresponding `shared_<version>.go` file.
+- Use one `<owner>_helpers.go` file across API versions. Helpers do not get
+  version-specific files; their typed signatures already make the applicable
+  API version clear.
 
 ## Validator signatures and context
 
