@@ -38,8 +38,8 @@
   for convenience.
 - Keep compatibility validators for a non-storage API version in a separate
   `<owner>_<version>.go` file, for example
-  `dynamographdeployment_v1alpha1.go`. Keep shared-version validators in the
-  corresponding `shared_<version>.go` file.
+  `dynamographdeployment_v1alpha1.go`. Keep validators for API types shared by
+  multiple resources in the corresponding `shared_<version>.go` file.
 
 ## Validator signatures and context
 
