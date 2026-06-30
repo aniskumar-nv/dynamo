@@ -18,9 +18,13 @@
 package validation
 
 import (
+	"fmt"
 	"strings"
 
+	nvidiacomv1beta1 "github.com/ai-dynamo/dynamo/deploy/operator/api/v1beta1"
 	"github.com/ai-dynamo/dynamo/deploy/operator/internal/consts"
+	controllercommon "github.com/ai-dynamo/dynamo/deploy/operator/internal/controller_common"
+	"github.com/ai-dynamo/dynamo/deploy/operator/internal/dynamo/epp"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -52,4 +56,64 @@ func invalidVLLMDistributedExecutorBackendAnnotation(annotations map[string]stri
 	default:
 		return value, true
 	}
+}
+
+// inferencePoolAvailabilityError checks the InferencePool API.
+// v.ctx and v.mgr must not be nil.
+func (v *sharedValidation) inferencePoolAvailabilityError() error {
+	if controllercommon.DetectInferencePoolAvailability(v.ctx, v.mgr) {
+		return nil
+	}
+	return fmt.Errorf(
+		"InferencePool API group (%s) is not available in the cluster; install the Gateway API Inference Extension before deploying EPP components",
+		epp.InferencePoolGroup,
+	)
+}
+
+func gpuMemoryServiceFor(
+	component *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec,
+) *nvidiacomv1beta1.GPUMemoryServiceSpec {
+	return gpuMemoryServiceForExperimental(component.Experimental)
+}
+
+func gpuMemoryServiceForExperimental(experimental *nvidiacomv1beta1.ExperimentalSpec) *nvidiacomv1beta1.GPUMemoryServiceSpec {
+	if experimental == nil {
+		return nil
+	}
+	return experimental.GPUMemoryService
+}
+
+func failoverFor(
+	component *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec,
+) *nvidiacomv1beta1.FailoverSpec {
+	return failoverForExperimental(component.Experimental)
+}
+
+func failoverForExperimental(experimental *nvidiacomv1beta1.ExperimentalSpec) *nvidiacomv1beta1.FailoverSpec {
+	if experimental == nil {
+		return nil
+	}
+	return experimental.Failover
+}
+
+func effectiveGMSMode(mode nvidiacomv1beta1.GPUMemoryServiceMode) nvidiacomv1beta1.GPUMemoryServiceMode {
+	if mode == "" {
+		return nvidiacomv1beta1.GMSModeIntraPod
+	}
+	return mode
+}
+
+func isInterPodGMS(gms *nvidiacomv1beta1.GPUMemoryServiceSpec) bool {
+	return gms != nil && effectiveGMSMode(gms.Mode) == nvidiacomv1beta1.GMSModeInterPod
+}
+
+func isInterPodFailover(failover *nvidiacomv1beta1.FailoverSpec) bool {
+	return failover != nil && effectiveGMSMode(failover.Mode) == nvidiacomv1beta1.GMSModeInterPod
+}
+
+func effectiveNumShadows(failover *nvidiacomv1beta1.FailoverSpec) int32 {
+	if failover.NumShadows < 1 {
+		return 1
+	}
+	return failover.NumShadows
 }
