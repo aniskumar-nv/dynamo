@@ -220,7 +220,7 @@ func (v *SharedSpecValidatorV1Alpha1) validateGMSClientContainerNames() error {
 
 // validateServiceAnnotations validates known annotations on the service-level spec.
 func (v *SharedSpecValidatorV1Alpha1) validateServiceAnnotations() error {
-	return validateVLLMDistributedExecutorBackendAnnotation(v.fieldPath+".annotations", v.spec.Annotations)
+	return vllmDistributedExecutorBackendAnnotationError(v.fieldPath+".annotations", v.spec.Annotations)
 }
 
 // validateEPPConfig validates EPP-specific configuration constraints.
@@ -484,4 +484,17 @@ func (v *SharedSpecValidatorV1Alpha1) validateFrontendSidecar() error {
 		}
 	}
 	return nil
+}
+
+func vllmDistributedExecutorBackendAnnotationError(fieldPath string, annotations map[string]string) error {
+	value, invalid := invalidVLLMDistributedExecutorBackendAnnotation(annotations)
+	if !invalid {
+		return nil
+	}
+	if fieldPath == "" {
+		return fmt.Errorf("annotation %s has invalid value %q: must be \"mp\" or \"ray\"",
+			consts.KubeAnnotationVLLMDistributedExecutorBackend, value)
+	}
+	return fmt.Errorf("%s[%s] has invalid value %q: must be \"mp\" or \"ray\"",
+		fieldPath, consts.KubeAnnotationVLLMDistributedExecutorBackend, value)
 }
