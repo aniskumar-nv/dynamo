@@ -99,11 +99,12 @@
 ## DCD and DGD shared fields
 
 - Intrinsic v1beta1 `DynamoComponentDeploymentSharedSpec` validation has one
-  structural validator, used by both DCD and DGD recursion. Do not introduce a
+  structural validator that is reusable by DCD and DGD recursion. DGD uses it
+  now; the future DCD structural migration must reuse it. Do not introduce a
   `SharedSpecValidator` wrapper or constructor.
-- The full shared-spec subtree stays in the versioned shared validation file,
-  including its create and update validators. Its current use from DGD does not
-  make those validators DGD-specific.
+- The full shared-spec subtree stays in the matching `shared_<version>.go`
+  file, including its create and update validators. Its current use from DGD
+  does not make those validators DGD-specific.
 - Validators for API types shared by multiple resources use the
   `*sharedValidation` receiver. Resource-specific request validators embed that
   base receiver so they can compose shared validation without attaching shared
