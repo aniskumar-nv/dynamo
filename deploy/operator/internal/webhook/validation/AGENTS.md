@@ -104,6 +104,13 @@
 - The full shared-spec subtree stays in the versioned shared validation file,
   including its create and update validators. Its current use from DGD does not
   make those validators DGD-specific.
+- Validators for API types shared by multiple resources use the
+  `*sharedValidation` receiver. Resource-specific request validators embed that
+  base receiver so they can compose shared validation without attaching shared
+  methods to a resource-specific receiver.
+- Keep only dependencies and request accumulation needed by shared validation
+  on `sharedValidation`. Resource-only state stays on the resource-specific
+  receiver.
 - Rules involving parent-only data stay with the parent validator. For example,
   DGD generated-name limits, DGD backend selection, and graph-level topology
   constraints belong to the DGD tree, not to the shared-spec validator.
