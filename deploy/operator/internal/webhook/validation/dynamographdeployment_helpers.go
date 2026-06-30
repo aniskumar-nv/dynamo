@@ -222,12 +222,11 @@ func (v *dynamoGraphDeploymentValidation) grovePathwayForDynamoGraphDeployment(
 	return true, ""
 }
 
-func dgdComponentNameLengthError(
+func dgdComponentResourceNameLength(
 	dgdName string,
 	components []nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec,
 	component *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec,
-	fldPath *field.Path,
-) *field.Error {
+) (int, string) {
 	pcsName := dynamo.PCSNameForDGD(dgdName, components)
 	componentName := component.ComponentName
 	combinedLength := len(pcsName) + len(strings.ToLower(componentName))
@@ -238,21 +237,7 @@ func dgdComponentNameLengthError(
 		combinedLength += len(longestPodCliqueName)
 		detail = fmt.Sprintf("PCS name + PCSG name + longest PodClique name %q", longestPodCliqueName)
 	}
-	if combinedLength <= maxCombinedResourceNameLength {
-		return nil
-	}
-	return field.Invalid(
-		fldPath,
-		componentName,
-		fmt.Sprintf(
-			"combined resource name length %d exceeds the %d-character pod-name limit (%s); shorten DynamoGraphDeployment name %q or component name %q",
-			combinedLength,
-			maxCombinedResourceNameLength,
-			detail,
-			dgdName,
-			componentName,
-		),
-	)
+	return combinedLength, detail
 }
 
 func hasIntraPodFailover(spec *nvidiacomv1beta1.DynamoGraphDeploymentSpec) bool {

@@ -116,7 +116,7 @@ func (h *DynamoGraphDeploymentHandler) ValidateUpdate(ctx context.Context, oldOb
 	req, err := admission.RequestFromContext(ctx)
 	if err != nil {
 		logger.Error(err, "failed to get admission request from context, replica changes for DGDSA-enabled services will be rejected")
-		// userInfo remains nil - validateReplicasChanges will fail closed
+		// userInfo remains nil, so scaling-adapter replica validation fails closed.
 	} else {
 		userInfo = &req.UserInfo
 	}

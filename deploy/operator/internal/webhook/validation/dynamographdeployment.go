@@ -289,8 +289,20 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentSpec(
 		componentPath := componentsPath.Index(i)
 
 		if opts.grovePathway {
-			if err := dgdComponentNameLengthError(opts.dgdName, spec.Components, component, componentPath.Child("name")); err != nil {
-				allErrs = append(allErrs, err)
+			combinedLength, detail := dgdComponentResourceNameLength(opts.dgdName, spec.Components, component)
+			if combinedLength > maxCombinedResourceNameLength {
+				allErrs = append(allErrs, field.Invalid(
+					componentPath.Child("name"),
+					component.ComponentName,
+					fmt.Sprintf(
+						"combined resource name length %d exceeds the %d-character pod-name limit (%s); shorten DynamoGraphDeployment name %q or component name %q",
+						combinedLength,
+						maxCombinedResourceNameLength,
+						detail,
+						opts.dgdName,
+						component.ComponentName,
+					),
+				))
 			}
 		}
 
