@@ -32,9 +32,11 @@
 ## Validator signatures and context
 
 - Keep structural values first, followed by `fldPath`.
-- Every structural `validate...` function returns
-  `(admission.Warnings, field.ErrorList)`, in that order. Aggregate both in the
-  same parent-to-child traversal; do not implement a second warning traversal.
+- Every structural `validate...` function returns `field.ErrorList`.
+- Accumulate warnings during that same structural traversal through
+  request-scoped receiver helpers named `warn` and `warnf`; do not return
+  warnings through every validator signature or implement a second warning
+  traversal.
 - The primary API value and `fldPath` passed to a validator are non-nil
   invariants and must be documented on the function. Do not add defensive nil
   checks for required validator arguments.
@@ -52,9 +54,10 @@
   embed, mutate, or extend a parent options struct. Do not use a generic,
   accumulating validation-context bag.
 - Keep request-wide immutable dependencies on the validator receiver: context,
-  API reader/client, feature configuration, and caller identity. Do not store
-  the current API node, field path, derived traversal data, warnings, or
-  accumulated errors on the receiver.
+  API reader/client, feature configuration, and caller identity. The receiver
+  may also carry the warnings accumulated by `warn` and `warnf` because it is
+  created once per request. Do not store the current API node, field path,
+  derived traversal data, or accumulated errors on the receiver.
 - Dependencies required by a validation path, including its context and
   manager/client, are non-nil construction invariants. Document and satisfy
   those invariants at the boundary; do not add nil fallbacks inside helpers.
@@ -69,8 +72,8 @@
 
 ## Errors, warnings, and compatibility
 
-- All `validate...` functions return warnings and `field.ErrorList`; do not
-  return `error`, use `errors.Join`, or build field paths with `fmt.Sprintf`.
+- All `validate...` functions return `field.ErrorList`; do not return `error`,
+  use `errors.Join`, or build field paths with `fmt.Sprintf`.
 - Use typed Kubernetes errors (`field.Required`, `field.Invalid`,
   `field.Forbidden`, `field.NotSupported`, and immutable-field validation).
   The admission boundary converts the final error list to an API invalid error.
