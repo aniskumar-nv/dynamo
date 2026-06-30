@@ -32,10 +32,14 @@
   currently reaches it. Keep DGD-only validators in
   `dynamographdeployment.go`, and keep validators for shared component API
   types in `shared_v1alpha1.go` or `shared_v1beta1.go` as appropriate.
-- Keep every structural `validate<Type>` function in that type owner's main
-  validation file. Put only non-validator helpers in the matching
+- Keep every structural `validate<Type>` function in that type and version's
+  main validation file. Put only non-validator helpers in the matching
   `<owner>_helpers.go` file; do not move shared validators into a caller's file
   for convenience.
+- Keep compatibility validators for a non-storage API version in a separate
+  `<owner>_<version>.go` file, for example
+  `dynamographdeployment_v1alpha1.go`. Keep shared-version validators in the
+  corresponding `shared_<version>.go` file.
 
 ## Validator signatures and context
 
