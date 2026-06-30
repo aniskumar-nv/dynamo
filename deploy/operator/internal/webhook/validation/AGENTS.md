@@ -12,9 +12,12 @@
 - A parent validates its own scalar fields and calls child validators in API
   declaration order. Slice paths use `Index(i)` and map paths use `Key(key)`;
   sort map keys before emitting errors.
-- Do not name validators after a policy or implementation detail. Put each
-  rule in the validator for the lowest common API-type ancestor of the fields
-  it relates. Helpers for lookup, sorting, normalization, or deriving context
+- Do not name validators after a policy or implementation detail. Start with
+  the lowest common API-type ancestor of the fields a rule relates, then keep
+  the rule there when it coordinates siblings or needs broad aggregation.
+  A child may own a rule when its invalid field and most of its logic are local
+  to that type, and the required ancestor facts are cheap and clear to pass
+  explicitly. Helpers for lookup, sorting, normalization, or deriving context
   are not validators and must not use a `validate` name.
 - For Kubernetes-owned nested types, delegate to their Kubernetes validator at
   the exact field path instead of reimplementing their schema validation.
