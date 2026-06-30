@@ -108,9 +108,7 @@ func TestDynamoGraphDeploymentHandlerValidateUpdate(t *testing.T) {
 		invalid := newBetaDGDForValidation()
 		invalid.Spec.Components = nil
 		_, err := handler.ValidateUpdate(ctx, newBetaDGDForValidation(), invalid)
-		if err == nil || !strings.Contains(err.Error(), "must have at least one component") {
-			t.Fatalf("ValidateUpdate() error = %v, want stateless validation failure", err)
-		}
+		assertBetaValidationError(t, err, "must have at least one component", "spec.components")
 	})
 
 	t.Run("stateful validation failure", func(t *testing.T) {
@@ -119,9 +117,7 @@ func TestDynamoGraphDeploymentHandlerValidateUpdate(t *testing.T) {
 		oldDGD.Spec.BackendFramework = "vllm"
 		newDGD.Spec.BackendFramework = sglangBackendFramework
 		_, err := handler.ValidateUpdate(ctx, oldDGD, newDGD)
-		if err == nil || !strings.Contains(err.Error(), "backendFramework") {
-			t.Fatalf("ValidateUpdate() error = %v, want stateful validation failure", err)
-		}
+		assertBetaValidationError(t, err, "backendFramework", "spec.backendFramework")
 	})
 }
 

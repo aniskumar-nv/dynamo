@@ -18,6 +18,7 @@
 package validation
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -26,6 +27,7 @@ import (
 	controllercommon "github.com/ai-dynamo/dynamo/deploy/operator/internal/controller_common"
 	"github.com/ai-dynamo/dynamo/deploy/operator/internal/dynamo/epp"
 	corev1 "k8s.io/api/core/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 const (
@@ -59,9 +61,9 @@ func invalidVLLMDistributedExecutorBackendAnnotation(annotations map[string]stri
 }
 
 // inferencePoolAvailabilityError checks the InferencePool API.
-// v.ctx and v.mgr must not be nil.
-func (v *sharedValidation) inferencePoolAvailabilityError() error {
-	if controllercommon.DetectInferencePoolAvailability(v.ctx, v.mgr) {
+// ctx and mgr must not be nil.
+func inferencePoolAvailabilityError(ctx context.Context, mgr ctrl.Manager) error {
+	if controllercommon.DetectInferencePoolAvailability(ctx, mgr) {
 		return nil
 	}
 	return fmt.Errorf(

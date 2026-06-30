@@ -260,6 +260,17 @@ func TestSharedSpecValidatorV1Alpha1_Validate(t *testing.T) {
 			errMsg:              `spec.services[decode].annotations[nvidia.com/vllm-distributed-executor-backend] has invalid value "invalid": must be "mp" or "ray"`,
 		},
 		{
+			name: "invalid service annotation without a field path",
+			spec: &nvidiacomv1alpha1.DynamoComponentDeploymentSharedSpec{
+				Annotations: map[string]string{
+					"nvidia.com/vllm-distributed-executor-backend": "invalid",
+				},
+			},
+			calculatedNamespace: "default-my-dgd",
+			wantErr:             true,
+			errMsg:              `annotation nvidia.com/vllm-distributed-executor-backend has invalid value "invalid": must be "mp" or "ray"`,
+		},
+		{
 			name: "checkpoint without gpuMemoryService is accepted",
 			spec: &nvidiacomv1alpha1.DynamoComponentDeploymentSharedSpec{
 				ComponentType: consts.ComponentTypeWorker,

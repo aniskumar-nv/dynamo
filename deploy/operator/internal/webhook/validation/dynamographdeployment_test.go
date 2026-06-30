@@ -209,6 +209,7 @@ func TestDynamoGraphDeploymentValidator_GroveSchedulingMatrix(t *testing.T) {
 		groveEnabled bool
 		mutate       func(*nvidiacomv1beta1.DynamoGraphDeployment)
 		wantErr      string
+		wantFields   []string
 	}{
 		{
 			name:         "priority class requires Grove",
@@ -265,7 +266,8 @@ func TestDynamoGraphDeploymentValidator_GroveSchedulingMatrix(t *testing.T) {
 				dgd.Name = longDGDName
 				betaWorkerComponent(dgd).ComponentName = tooLongComponentName
 			},
-			wantErr: "combined resource name length",
+			wantErr:    "combined resource name length",
+			wantFields: []string{"spec.components[1].name"},
 		},
 		{
 			name:         "rendered Grove resource name length is skipped outside Grove",
@@ -284,7 +286,7 @@ func TestDynamoGraphDeploymentValidator_GroveSchedulingMatrix(t *testing.T) {
 
 			validator := newDynamoGraphDeploymentTestValidator(t, tt.groveEnabled)
 			_, err := validator.Validate(context.Background(), deployment)
-			assertBetaValidationError(t, err, tt.wantErr)
+			assertBetaValidationError(t, err, tt.wantErr, tt.wantFields...)
 		})
 	}
 }
@@ -754,10 +756,11 @@ func TestDynamoGraphDeploymentValidator_TopologyMatrix(t *testing.T) {
 	missingTopologyManager := newGroveTopologyTestManager(t)
 
 	tests := []struct {
-		name    string
-		mgr     ctrl.Manager
-		mutate  func(*nvidiacomv1beta1.DynamoGraphDeploymentSpec)
-		wantErr string
+		name       string
+		mgr        ctrl.Manager
+		mutate     func(*nvidiacomv1beta1.DynamoGraphDeploymentSpec)
+		wantErr    string
+		wantFields []string
 	}{
 		{
 			name: "spec pack domain format is owned by the schema",
@@ -833,6 +836,19 @@ func TestDynamoGraphDeploymentValidator_TopologyMatrix(t *testing.T) {
 			wantErr: `spec.topologyConstraint.clusterTopologyName: Invalid value: "missing-topology"`,
 		},
 		{
+			name: "independent topology errors aggregate",
+			mgr:  missingTopologyManager,
+			mutate: func(spec *nvidiacomv1beta1.DynamoGraphDeploymentSpec) {
+				spec.TopologyConstraint = &nvidiacomv1beta1.SpecTopologyConstraint{ClusterTopologyName: "missing-topology"}
+				spec.Components[1].TopologyConstraint = &nvidiacomv1beta1.TopologyConstraint{PackDomain: "rack"}
+			},
+			wantErr: `spec.topologyConstraint.clusterTopologyName: Invalid value: "missing-topology"`,
+			wantFields: []string{
+				"spec.components[0].topologyConstraint",
+				"spec.topologyConstraint.clusterTopologyName",
+			},
+		},
+		{
 			name: "pack domain must exist in cluster topology",
 			mgr:  topologyManager,
 			mutate: func(spec *nvidiacomv1beta1.DynamoGraphDeploymentSpec) {
@@ -867,7 +883,7 @@ func TestDynamoGraphDeploymentValidator_TopologyMatrix(t *testing.T) {
 			}
 			validator := NewDynamoGraphDeploymentValidator(mgr, true)
 			_, err := validator.Validate(context.Background(), deployment)
-			assertBetaValidationError(t, err, tt.wantErr)
+			assertBetaValidationError(t, err, tt.wantErr, tt.wantFields...)
 		})
 	}
 }
@@ -1172,13 +1188,14 @@ func TestDynamoGraphDeploymentValidator_ValidateUpdate(t *testing.T) {
 	const operatorPrincipal = "system:serviceaccount:dynamo-system:dynamo-operator"
 
 	tests := []struct {
-		name      string
-		oldDGD    *nvidiacomv1beta1.DynamoGraphDeployment
-		newDGD    *nvidiacomv1beta1.DynamoGraphDeployment
-		userInfo  *authenticationv1.UserInfo
-		principal string
-		wantErr   string
-		wantWarns bool
+		name       string
+		oldDGD     *nvidiacomv1beta1.DynamoGraphDeployment
+		newDGD     *nvidiacomv1beta1.DynamoGraphDeployment
+		userInfo   *authenticationv1.UserInfo
+		principal  string
+		wantErr    string
+		wantFields []string
+		wantWarns  bool
 	}{
 		{
 			name:   "component topology is immutable",
@@ -1189,7 +1206,8 @@ func TestDynamoGraphDeploymentValidator_ValidateUpdate(t *testing.T) {
 					Replicas:      k8sptr.To(int32(1)),
 				})
 			}),
-			wantErr: "component topology is immutable and cannot be modified after creation: components added: [extra]",
+			wantErr:    "component topology is immutable and cannot be modified after creation: components added: [extra]",
+			wantFields: []string{"spec.components"},
 		},
 		{
 			name:   "component removal is immutable",
@@ -1197,7 +1215,8 @@ func TestDynamoGraphDeploymentValidator_ValidateUpdate(t *testing.T) {
 			newDGD: betaDGDWithSpec(func(spec *nvidiacomv1beta1.DynamoGraphDeploymentSpec) {
 				spec.Components = spec.Components[:1]
 			}),
-			wantErr: "component topology is immutable and cannot be modified after creation: components removed: [worker]",
+			wantErr:    "component topology is immutable and cannot be modified after creation: components removed: [worker]",
+			wantFields: []string{"spec.components"},
 		},
 		{
 			name:   "component add and remove reports both sides",
@@ -1211,7 +1230,8 @@ func TestDynamoGraphDeploymentValidator_ValidateUpdate(t *testing.T) {
 					},
 				}
 			}),
-			wantErr: "component topology is immutable and cannot be modified after creation: components added: [extra], components removed: [frontend]",
+			wantErr:    "component topology is immutable and cannot be modified after creation: components added: [extra], components removed: [frontend]",
+			wantFields: []string{"spec.components"},
 		},
 		{
 			name:   "component reorder is allowed",
@@ -1423,6 +1443,22 @@ func TestDynamoGraphDeploymentValidator_ValidateUpdate(t *testing.T) {
 			wantErr:   "spec.components[1].replicas: Forbidden: cannot be modified directly when scaling adapter is enabled",
 		},
 		{
+			name: "scaling adapter removal cannot bypass replica ownership",
+			oldDGD: betaDGDWithWorker(func(worker *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec) {
+				worker.ScalingAdapter = &nvidiacomv1beta1.ScalingAdapter{}
+				worker.Replicas = k8sptr.To(int32(2))
+			}),
+			newDGD: betaDGDWithWorker(func(worker *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec) {
+				worker.ScalingAdapter = nil
+				worker.Replicas = k8sptr.To(int32(3))
+			}),
+			userInfo: &authenticationv1.UserInfo{
+				Username: "system:serviceaccount:default:regular-user",
+			},
+			principal: operatorPrincipal,
+			wantErr:   "spec.components[1].replicas: Forbidden: cannot be modified directly when scaling adapter is enabled",
+		},
+		{
 			name: "operator can change scaling-adapter-owned replicas",
 			oldDGD: betaDGDWithWorker(func(worker *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec) {
 				worker.ScalingAdapter = &nvidiacomv1beta1.ScalingAdapter{}
@@ -1510,7 +1546,7 @@ func TestDynamoGraphDeploymentValidator_ValidateUpdate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			validator := newDynamoGraphDeploymentTestValidator(t, true)
 			warnings, err := validator.ValidateUpdate(context.Background(), tt.oldDGD, tt.newDGD, tt.userInfo, tt.principal)
-			assertBetaValidationError(t, err, tt.wantErr)
+			assertBetaValidationError(t, err, tt.wantErr, tt.wantFields...)
 			if tt.wantWarns && len(warnings) == 0 {
 				t.Fatal("ValidateUpdate() expected warnings but got none")
 			}
@@ -1787,7 +1823,7 @@ func newTestClusterTopology() *grovev1alpha1.ClusterTopology {
 	}
 }
 
-func assertBetaValidationError(t *testing.T, err error, wantErr string) {
+func assertBetaValidationError(t *testing.T, err error, wantErr string, wantFields ...string) {
 	t.Helper()
 	if wantErr == "" {
 		if err != nil {
@@ -1805,9 +1841,29 @@ func assertBetaValidationError(t *testing.T, err error, wantErr string) {
 	if statusErr.ErrStatus.Details == nil || len(statusErr.ErrStatus.Details.Causes) == 0 {
 		t.Fatalf("error = %v, want at least one typed field cause", err)
 	}
+	if len(wantFields) == 0 {
+		if fieldName, _, found := strings.Cut(wantErr, ":"); found {
+			wantFields = []string{fieldName}
+		} else if !strings.ContainsAny(wantErr, " \t") {
+			wantFields = []string{wantErr}
+		}
+	}
+	if len(wantFields) == 0 {
+		t.Fatalf("test for error %q must specify an exact expected field path", wantErr)
+	}
+
+	causeFields := make([]string, 0, len(statusErr.ErrStatus.Details.Causes))
+	causeFieldSet := make(map[string]struct{}, len(statusErr.ErrStatus.Details.Causes))
 	for _, cause := range statusErr.ErrStatus.Details.Causes {
 		if cause.Field == "" {
 			t.Fatalf("error cause = %#v, want an exact field path", cause)
+		}
+		causeFields = append(causeFields, cause.Field)
+		causeFieldSet[cause.Field] = struct{}{}
+	}
+	for _, wantField := range wantFields {
+		if _, found := causeFieldSet[wantField]; !found {
+			t.Fatalf("error cause fields = %v, want exact field %q", causeFields, wantField)
 		}
 	}
 	if !strings.Contains(err.Error(), wantErr) {

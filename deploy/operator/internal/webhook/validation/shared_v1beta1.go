@@ -18,6 +18,7 @@
 package validation
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -28,7 +29,25 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	k8sptr "k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
+
+// sharedValidation carries request-wide dependencies and accumulation used by
+// validation for API types shared by multiple resources.
+type sharedValidation struct {
+	ctx      context.Context
+	mgr      ctrl.Manager
+	warnings admission.Warnings
+}
+
+func (v *sharedValidation) warn(message string) {
+	v.warnings = append(v.warnings, message)
+}
+
+func (v *sharedValidation) warnf(format string, args ...any) {
+	v.warn(fmt.Sprintf(format, args...))
+}
 
 // validateDynamoComponentDeploymentSharedSpec validates spec. spec and fldPath must not be nil.
 func (v *sharedValidation) validateDynamoComponentDeploymentSharedSpec(
@@ -85,7 +104,7 @@ func (v *sharedValidation) validateDynamoComponentDeploymentSharedSpec(
 	}
 
 	if spec.ComponentType == nvidiacomv1beta1.ComponentTypeEPP {
-		if err := v.inferencePoolAvailabilityError(); err != nil {
+		if err := inferencePoolAvailabilityError(v.ctx, v.mgr); err != nil {
 			allErrs = append(allErrs, field.Forbidden(fldPath.Child("type"), fmt.Sprintf("cannot deploy EPP component: %v", err)))
 		}
 		if spec.IsMultinode() {
@@ -342,7 +361,7 @@ func (v *sharedValidation) validateDynamoComponentDeploymentSharedSpecUpdate(
 	canModifyReplicas bool,
 ) field.ErrorList {
 	allErrs := field.ErrorList{}
-	if newComponent.ScalingAdapter != nil && !canModifyReplicas &&
+	if (newComponent.ScalingAdapter != nil || oldComponent.ScalingAdapter != nil) && !canModifyReplicas &&
 		k8sptr.Deref(newComponent.Replicas, int32(1)) != k8sptr.Deref(oldComponent.Replicas, int32(1)) {
 		allErrs = append(allErrs, field.Forbidden(
 			fldPath.Child("replicas"),

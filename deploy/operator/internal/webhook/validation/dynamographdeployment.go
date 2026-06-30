@@ -123,7 +123,7 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeployment(
 		hasIntraPodFailover(&dgd.Spec),
 	)...)
 
-	grovePathway, grovePathwayRequirement := v.grovePathwayForDynamoGraphDeployment(dgd)
+	grovePathway, grovePathwayRequirement := grovePathwayForDynamoGraphDeployment(v.groveEnabled, dgd)
 	specOpts := dynamoGraphDeploymentSpecValidationOptions{
 		dgdName:                 dgd.Name,
 		generation:              dgd.Generation,
@@ -275,10 +275,10 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentSpec(
 			}
 
 			var topologyInfo *clusterTopologyInfo
-			if len(topologyErrs) == 0 && spec.TopologyConstraint.ClusterTopologyName != "" &&
+			if spec.TopologyConstraint.ClusterTopologyName != "" &&
 				opts.generation <= 1 && opts.grovePathway {
 				var err error
-				topologyInfo, err = v.readGroveClusterTopology(spec.TopologyConstraint.ClusterTopologyName)
+				topologyInfo, err = readGroveClusterTopology(v.ctx, v.mgr, spec.TopologyConstraint.ClusterTopologyName)
 				if err != nil {
 					detail := fmt.Sprintf("failed to read ClusterTopology: %v", err)
 					if k8serrors.IsNotFound(err) {
@@ -434,7 +434,7 @@ func (v *dynamoGraphDeploymentValidation) validateKvTransferPolicy(
 		return allErrs
 	}
 
-	topologyInfo, err := v.readGroveClusterTopology(policy.ClusterTopologyName)
+	topologyInfo, err := readGroveClusterTopology(v.ctx, v.mgr, policy.ClusterTopologyName)
 	if err != nil {
 		detail := fmt.Sprintf("failed to read ClusterTopology: %v", err)
 		if k8serrors.IsNotFound(err) {

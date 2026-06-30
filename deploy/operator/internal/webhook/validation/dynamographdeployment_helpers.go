@@ -18,6 +18,7 @@
 package validation
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -31,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	k8sptr "k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 const (
@@ -106,9 +108,10 @@ func sortedV1Alpha1ServiceNames(
 	return names
 }
 
-func (v *dynamoGraphDeploymentValidation) readGroveClusterTopology(name string) (*clusterTopologyInfo, error) {
+// readGroveClusterTopology reads a topology by name. ctx and mgr must not be nil.
+func readGroveClusterTopology(ctx context.Context, mgr ctrl.Manager, name string) (*clusterTopologyInfo, error) {
 	clusterTopology := &grovev1alpha1.ClusterTopology{}
-	if err := v.mgr.GetClient().Get(v.ctx, types.NamespacedName{Name: name}, clusterTopology); err != nil {
+	if err := mgr.GetClient().Get(ctx, types.NamespacedName{Name: name}, clusterTopology); err != nil {
 		return nil, err
 	}
 
@@ -126,10 +129,11 @@ func (v *dynamoGraphDeploymentValidation) readGroveClusterTopology(name string) 
 	return info, nil
 }
 
-func (v *dynamoGraphDeploymentValidation) grovePathwayForDynamoGraphDeployment(
+func grovePathwayForDynamoGraphDeployment(
+	groveEnabled bool,
 	dgd *nvidiacomv1beta1.DynamoGraphDeployment,
 ) (bool, string) {
-	if !v.groveEnabled {
+	if !groveEnabled {
 		return false, "requires the Grove pathway, but Grove is disabled in the operator configuration"
 	}
 	annotationValue := strings.ToLower(dgd.Annotations[consts.KubeAnnotationEnableGrove])

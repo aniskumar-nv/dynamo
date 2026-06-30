@@ -221,7 +221,11 @@ func (v *SharedSpecValidatorV1Alpha1) validateGMSClientContainerNames() error {
 
 // validateServiceAnnotations validates known annotations on the service-level spec.
 func (v *SharedSpecValidatorV1Alpha1) validateServiceAnnotations() error {
-	return vllmDistributedExecutorBackendAnnotationError(v.fieldPath+".annotations", v.spec.Annotations)
+	annotationsPath := ""
+	if v.fieldPath != "" {
+		annotationsPath = v.fieldPath + ".annotations"
+	}
+	return vllmDistributedExecutorBackendAnnotationError(annotationsPath, v.spec.Annotations)
 }
 
 // validateEPPConfig validates EPP-specific configuration constraints.
