@@ -25,11 +25,8 @@ import (
 	nvidiacomv1alpha1 "github.com/ai-dynamo/dynamo/deploy/operator/api/v1alpha1"
 	nvidiacomv1beta1 "github.com/ai-dynamo/dynamo/deploy/operator/api/v1beta1"
 	"github.com/ai-dynamo/dynamo/deploy/operator/internal/consts"
-	controllercommon "github.com/ai-dynamo/dynamo/deploy/operator/internal/controller_common"
 	"github.com/ai-dynamo/dynamo/deploy/operator/internal/dynamo"
-	"github.com/ai-dynamo/dynamo/deploy/operator/internal/dynamo/epp"
 	grovev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
-	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -39,11 +36,6 @@ import (
 const (
 	// maxCombinedResourceNameLength is kept as a local alias for readability.
 	maxCombinedResourceNameLength = consts.MaxCombinedGroveResourceNameLength
-
-	unsetValue = "<unset>"
-
-	vllmDistributedExecutorBackendMP  = "mp"
-	vllmDistributedExecutorBackendRay = "ray"
 )
 
 type clusterTopologyInfo struct {
@@ -122,18 +114,6 @@ func sortedV1Alpha1ServiceNames(
 	return names
 }
 
-// inferencePoolAvailabilityError checks the InferencePool API.
-// v.ctx and v.mgr must not be nil.
-func (v *dynamoGraphDeploymentValidation) inferencePoolAvailabilityError() error {
-	if controllercommon.DetectInferencePoolAvailability(v.ctx, v.mgr) {
-		return nil
-	}
-	return fmt.Errorf(
-		"InferencePool API group (%s) is not available in the cluster; install the Gateway API Inference Extension before deploying EPP components",
-		epp.InferencePoolGroup,
-	)
-}
-
 func (v *dynamoGraphDeploymentValidation) readGroveClusterTopology(name string) (*clusterTopologyInfo, error) {
 	clusterTopology := &grovev1alpha1.ClusterTopology{}
 	if err := v.mgr.GetClient().Get(v.ctx, types.NamespacedName{Name: name}, clusterTopology); err != nil {
@@ -152,15 +132,6 @@ func (v *dynamoGraphDeploymentValidation) readGroveClusterTopology(name string) 
 	}
 	sort.Strings(info.domains)
 	return info, nil
-}
-
-func hasContainerNamed(containers []corev1.Container, name string) bool {
-	for i := range containers {
-		if containers[i].Name == name {
-			return true
-		}
-	}
-	return false
 }
 
 func (v *dynamoGraphDeploymentValidation) grovePathwayForDynamoGraphDeployment(
@@ -266,54 +237,6 @@ func effectiveKvTransferEnforcement(policy *nvidiacomv1beta1.KvTransferPolicy) n
 	return policy.Enforcement
 }
 
-func gpuMemoryServiceFor(
-	component *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec,
-) *nvidiacomv1beta1.GPUMemoryServiceSpec {
-	return gpuMemoryServiceForExperimental(component.Experimental)
-}
-
-func gpuMemoryServiceForExperimental(experimental *nvidiacomv1beta1.ExperimentalSpec) *nvidiacomv1beta1.GPUMemoryServiceSpec {
-	if experimental == nil {
-		return nil
-	}
-	return experimental.GPUMemoryService
-}
-
-func failoverFor(
-	component *nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec,
-) *nvidiacomv1beta1.FailoverSpec {
-	return failoverForExperimental(component.Experimental)
-}
-
-func failoverForExperimental(experimental *nvidiacomv1beta1.ExperimentalSpec) *nvidiacomv1beta1.FailoverSpec {
-	if experimental == nil {
-		return nil
-	}
-	return experimental.Failover
-}
-
-func effectiveGMSMode(mode nvidiacomv1beta1.GPUMemoryServiceMode) nvidiacomv1beta1.GPUMemoryServiceMode {
-	if mode == "" {
-		return nvidiacomv1beta1.GMSModeIntraPod
-	}
-	return mode
-}
-
-func isInterPodGMS(gms *nvidiacomv1beta1.GPUMemoryServiceSpec) bool {
-	return gms != nil && effectiveGMSMode(gms.Mode) == nvidiacomv1beta1.GMSModeInterPod
-}
-
-func isInterPodFailover(failover *nvidiacomv1beta1.FailoverSpec) bool {
-	return failover != nil && effectiveGMSMode(failover.Mode) == nvidiacomv1beta1.GMSModeInterPod
-}
-
-func effectiveNumShadows(failover *nvidiacomv1beta1.FailoverSpec) int32 {
-	if failover.NumShadows < 1 {
-		return 1
-	}
-	return failover.NumShadows
-}
-
 func getUnique[T comparable](slice []T) []T {
 	seen := make(map[T]struct{}, len(slice))
 	uniqueSlice := make([]T, 0, len(slice))
@@ -335,18 +258,4 @@ func difference(a, b map[string]struct{}) []string {
 		}
 	}
 	return result
-}
-
-func invalidVLLMDistributedExecutorBackendAnnotation(annotations map[string]string) (string, bool) {
-	value, exists := annotations[consts.KubeAnnotationVLLMDistributedExecutorBackend]
-	if !exists {
-		return "", false
-	}
-
-	switch strings.ToLower(value) {
-	case vllmDistributedExecutorBackendMP, vllmDistributedExecutorBackendRay:
-		return "", false
-	default:
-		return value, true
-	}
 }
