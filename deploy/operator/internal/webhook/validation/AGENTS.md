@@ -28,6 +28,14 @@
   are not validators and must not use a `validate` name.
 - For Kubernetes-owned nested types, delegate to their Kubernetes validator at
   the exact field path instead of reimplementing their schema validation.
+- File ownership follows the API type being validated, not the resource that
+  currently reaches it. Keep DGD-only validators in
+  `dynamographdeployment.go`, and keep validators for shared component API
+  types in `shared_v1alpha1.go` or `shared_v1beta1.go` as appropriate.
+- Keep every structural `validate<Type>` function in that type owner's main
+  validation file. Put only non-validator helpers in the matching
+  `<owner>_helpers.go` file; do not move shared validators into a caller's file
+  for convenience.
 
 ## Validator signatures and context
 
@@ -77,7 +85,9 @@
 - Use typed Kubernetes errors (`field.Required`, `field.Invalid`,
   `field.Forbidden`, `field.NotSupported`, and immutable-field validation).
   The admission boundary converts the final error list to an API invalid error.
-- Keep warnings outside the structural error-validation recursion.
+- Emit warnings from their structural owner through the request-scoped
+  receiver during the same recursion that collects errors. Keep warning
+  accumulation outside `field.ErrorList`; do not add a warning-only recursion.
 - Keep v1beta1 and v1alpha1 validation recursions separate. Conversion
   compatibility is a separate boundary with explicit conversion/fidelity tests;
   do not build a parallel cross-version validator.
@@ -87,6 +97,9 @@
 - Intrinsic v1beta1 `DynamoComponentDeploymentSharedSpec` validation has one
   structural validator, used by both DCD and DGD recursion. Do not introduce a
   `SharedSpecValidator` wrapper or constructor.
+- The full shared-spec subtree stays in the versioned shared validation file,
+  including its create and update validators. Its current use from DGD does not
+  make those validators DGD-specific.
 - Rules involving parent-only data stay with the parent validator. For example,
   DGD generated-name limits, DGD backend selection, and graph-level topology
   constraints belong to the DGD tree, not to the shared-spec validator.
