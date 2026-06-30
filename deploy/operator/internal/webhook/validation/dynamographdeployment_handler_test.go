@@ -117,7 +117,7 @@ func TestDynamoGraphDeploymentHandlerValidateUpdate(t *testing.T) {
 		oldDGD := newBetaDGDForValidation()
 		newDGD := oldDGD.DeepCopy()
 		oldDGD.Spec.BackendFramework = "vllm"
-		newDGD.Spec.BackendFramework = "sglang"
+		newDGD.Spec.BackendFramework = sglangBackendFramework
 		_, err := handler.ValidateUpdate(ctx, oldDGD, newDGD)
 		if err == nil || !strings.Contains(err.Error(), "backendFramework") {
 			t.Fatalf("ValidateUpdate() error = %v, want stateful validation failure", err)

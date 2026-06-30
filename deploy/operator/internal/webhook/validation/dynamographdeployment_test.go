@@ -40,6 +40,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+const sglangBackendFramework = "sglang"
+
 func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -124,7 +126,7 @@ func TestDynamoGraphDeploymentValidator_Validate(t *testing.T) {
 			name:         "inter-pod GMS requires vLLM backend",
 			groveEnabled: true,
 			deployment: betaDGDWithSpec(func(spec *nvidiacomv1beta1.DynamoGraphDeploymentSpec) {
-				spec.BackendFramework = "sglang"
+				spec.BackendFramework = sglangBackendFramework
 				enableBetaInterPodGMS(&spec.Components[1])
 			}),
 			wantErr: "spec.components[1].experimental.gpuMemoryService.mode: Invalid value",
@@ -1390,7 +1392,7 @@ func TestDynamoGraphDeploymentValidator_ValidateUpdate(t *testing.T) {
 			name:   "backend framework changes warn and fail",
 			oldDGD: newBetaDGDForValidation(),
 			newDGD: betaDGDWithSpec(func(spec *nvidiacomv1beta1.DynamoGraphDeploymentSpec) {
-				spec.BackendFramework = "sglang"
+				spec.BackendFramework = sglangBackendFramework
 			}),
 			wantErr:   "spec.backendFramework: Invalid value",
 			wantWarns: true,
