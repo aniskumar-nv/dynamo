@@ -12,6 +12,9 @@
 - A parent validates its own scalar fields and calls child validators in API
   declaration order. Slice paths use `Index(i)` and map paths use `Key(key)`;
   sort map keys before emitting errors.
+- Aggregate independent errors. Do not use the presence of an earlier error to
+  skip a validation or lookup unless that operation actually depends on the
+  earlier validation succeeding.
 - Seed root validation with the actual top-level field paths, such as
   `field.NewPath("metadata")` and `field.NewPath("spec")`, matching upstream
   Kubernetes validation. Do not invent a synthetic resource path or start
@@ -29,17 +32,16 @@
 - For Kubernetes-owned nested types, delegate to their Kubernetes validator at
   the exact field path instead of reimplementing their schema validation.
 - File ownership follows the API type being validated, not the resource that
-  currently reaches it. Keep DGD-only validators in
-  `dynamographdeployment.go`, and keep validators for shared component API
-  types in `shared_v1alpha1.go` or `shared_v1beta1.go` as appropriate.
+  currently reaches it. Keep resource-specific validators in that resource's
+  file and validators for types shared by multiple resources in a
+  `shared_<version>.go` file.
 - Keep every structural `validate<Type>` function in that type and version's
   main validation file. Put only non-validator helpers in the matching
   `<owner>_helpers.go` file; do not move shared validators into a caller's file
   for convenience.
 - Keep compatibility validators for a non-storage API version in a separate
-  `<owner>_<version>.go` file, for example
-  `dynamographdeployment_v1alpha1.go`. Keep validators for API types shared by
-  multiple resources in the corresponding `shared_<version>.go` file.
+  `<owner>_<version>.go` file. Keep validators for API types shared by multiple
+  resources in the corresponding `shared_<version>.go` file.
 - Use one `<owner>_helpers.go` file across API versions. Helpers do not get
   version-specific files; their typed signatures already make the applicable
   API version clear.
@@ -49,7 +51,7 @@
 - Keep structural values first, followed by `fldPath`.
 - Every structural `validate...` function returns `field.ErrorList`.
 - Accumulate warnings during that same structural traversal through
-  request-scoped receiver helpers named `warn` and `warnf`; do not return
+  core request-scoped receiver methods named `warn` and `warnf`; do not return
   warnings through every validator signature or implement a second warning
   traversal.
 - The primary API value and `fldPath` passed to a validator are non-nil
@@ -73,11 +75,17 @@
   may also carry the warnings accumulated by `warn` and `warnf` because it is
   created once per request. Do not store the current API node, field path,
   derived traversal data, or accumulated errors on the receiver.
+- Only structural `validate...` functions use validation receivers. Lookup,
+  derivation, sorting, normalization, and comparison helpers are standalone
+  functions with explicit dependencies. Core request-accumulation methods such
+  as `warn` and `warnf` are the exception and stay with their receiver.
 - Dependencies required by a validation path, including its context and
   manager/client, are non-nil construction invariants. Document and satisfy
   those invariants at the boundary; do not add nil fallbacks inside helpers.
 - Update validators take `new`, `old`, and `fldPath` as their structural
   inputs. Apply the same direct-context/typed-options threshold afterward.
+- Update rules consider both old and new state whenever removing or replacing
+  a field could bypass a guard that applies while the field is present.
 - When otherwise identical Go type names from another API version need a
   distinct validator, suffix the type name with the version, for example
   `validateVolumeMountV1alpha1`; do not prefix the version.
@@ -95,32 +103,29 @@
 - Emit warnings from their structural owner through the request-scoped
   receiver during the same recursion that collects errors. Keep warning
   accumulation outside `field.ErrorList`; do not add a warning-only recursion.
-- Keep v1beta1 and v1alpha1 validation recursions separate. Conversion
-  compatibility is a separate boundary with explicit conversion/fidelity tests;
-  do not build a parallel cross-version validator.
+- Keep storage-version and compatibility-version validation recursions
+  separate. Conversion is a boundary with explicit conversion and fidelity
+  tests; do not build a parallel cross-version validator.
 
-## DCD and DGD shared fields
+## API types shared by multiple resources
 
-- Intrinsic v1beta1 `DynamoComponentDeploymentSharedSpec` validation has one
-  structural validator that is reusable by DCD and DGD recursion. DGD uses it
-  now; the future DCD structural migration must reuse it. Do not introduce a
-  `SharedSpecValidator` wrapper or constructor.
-- The full shared-spec subtree stays in the matching `shared_<version>.go`
-  file, including its create and update validators. Its current use from DGD
-  does not make those validators DGD-specific.
-- Validators for API types shared by multiple resources use the
-  `*sharedValidation` receiver. Resource-specific request validators embed that
-  base receiver so they can compose shared validation without attaching shared
-  methods to a resource-specific receiver.
-- Declare `sharedValidation` in `shared_v1beta1.go`, alongside the primary
-  structural shared-spec validation it supports. Keep its non-validator methods
-  in `shared_helpers.go`; do not create a standalone file just for the receiver.
+- Give each shared API type one structural validator that every resource
+  recursion reuses. Do not wrap it in a stateful per-type validator object or
+  duplicate it under each caller.
+- Keep the full shared-type subtree, including create and update validators, in
+  the matching `shared_<version>.go` file.
+- Shared-type validators use a shared request receiver. Resource-specific
+  receivers embed that base so they can compose shared validation without
+  attaching shared methods to a resource-specific receiver.
+- Declare a validation receiver alongside the primary structural validation it
+  supports, with its core accumulation methods beside it. Do not create a
+  standalone file solely for receiver plumbing.
 - Keep only dependencies and request accumulation needed by shared validation
-  on `sharedValidation`. Resource-only state stays on the resource-specific
+  on the shared receiver. Resource-only state stays on the resource-specific
   receiver.
-- Rules involving parent-only data stay with the parent validator. For example,
-  DGD generated-name limits, DGD backend selection, and graph-level topology
-  constraints belong to the DGD tree, not to the shared-spec validator.
+- Rules involving parent-only data stay with the parent validator. Pass parent
+  facts into a child only when the child's rule remains locally understandable
+  and the extraction cost is small.
 
 ## Tests
 
