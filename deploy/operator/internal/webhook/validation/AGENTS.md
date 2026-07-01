@@ -31,6 +31,10 @@
   are not validators and must not use a `validate` name.
 - For Kubernetes-owned nested types, delegate to their Kubernetes validator at
   the exact field path instead of reimplementing their schema validation.
+- Before deleting or moving an existing validation rule, inventory it and map
+  it explicitly to CRD schema, CEL, or a structural validator. Presence rules
+  do not replace value rules; preserve any semantic gap in code or strengthen
+  the schema and prove it with schema-admission coverage.
 - File ownership follows the API type being validated, not the resource that
   currently reaches it. Keep resource-specific validators in that resource's
   file and validators for types shared by multiple resources in a
@@ -100,6 +104,10 @@
 - Use typed Kubernetes errors (`field.Required`, `field.Invalid`,
   `field.Forbidden`, `field.NotSupported`, and immutable-field validation).
   The admission boundary converts the final error list to an API invalid error.
+- Keep `field.Invalid` bad values compact and non-sensitive. Never attach a
+  complete resource subtree, pod template, environment list, or other
+  potentially secret-bearing value; use the offending scalar or
+  `field.Forbidden` when no bad value is needed.
 - Emit warnings from their structural owner through the request-scoped
   receiver during the same recursion that collects errors. Keep warning
   accumulation outside `field.ErrorList`; do not add a warning-only recursion.
@@ -132,5 +140,8 @@
 - Test files mirror the API type tree and test structural validators directly.
 - Assert typed errors and exact field paths, aggregation of independent errors,
   and deterministic ordering. Do not assert only rendered error strings.
+- Add regression coverage for every legacy rule retained during a structural
+  migration. When ownership moves to schema or CEL, exercise the real schema
+  admission boundary rather than treating a unit-test assumption as proof.
 - Every newly added nested API type must be directly checked by its parent or
   delegated to its exact-type validator.
