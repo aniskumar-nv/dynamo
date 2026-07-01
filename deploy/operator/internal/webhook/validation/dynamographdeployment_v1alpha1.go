@@ -20,6 +20,7 @@ package validation
 import (
 	nvidiacomv1alpha1 "github.com/ai-dynamo/dynamo/deploy/operator/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	k8sptr "k8s.io/utils/ptr"
 )
 
 // validateDynamoGraphDeploymentV1alpha1 validates dgd. dgd must not be nil.
@@ -45,6 +46,11 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentSpecV1alp
 	dgdNamespace string,
 ) field.ErrorList {
 	allErrs := field.ErrorList{}
+	pvcsPath := fldPath.Child("pvcs")
+	for i := range spec.PVCs {
+		allErrs = append(allErrs, v.validatePVCV1alpha1(&spec.PVCs[i], pvcsPath.Index(i))...)
+	}
+
 	servicesPath := fldPath.Child("services")
 	for _, serviceName := range sortedV1Alpha1ServiceNames(spec.Services) {
 		service := spec.Services[serviceName]
@@ -59,6 +65,30 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentSpecV1alp
 			servicePath,
 			dynamoNamespace,
 		)...)
+	}
+	return allErrs
+}
+
+// validatePVCV1alpha1 validates pvc. pvc and fldPath must not be nil.
+func (v *dynamoGraphDeploymentValidation) validatePVCV1alpha1(
+	pvc *nvidiacomv1alpha1.PVC,
+	fldPath *field.Path,
+) field.ErrorList {
+	allErrs := field.ErrorList{}
+	if pvc.Name == nil || *pvc.Name == "" {
+		allErrs = append(allErrs, field.Required(fldPath.Child("name"), "is required"))
+	}
+	if !k8sptr.Deref(pvc.Create, false) {
+		return allErrs
+	}
+	if pvc.StorageClass == "" {
+		allErrs = append(allErrs, field.Required(fldPath.Child("storageClass"), "is required when create is true"))
+	}
+	if pvc.Size.IsZero() {
+		allErrs = append(allErrs, field.Required(fldPath.Child("size"), "is required when create is true"))
+	}
+	if pvc.VolumeAccessMode == "" {
+		allErrs = append(allErrs, field.Required(fldPath.Child("volumeAccessMode"), "is required when create is true"))
 	}
 	return allErrs
 }

@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	semver "github.com/Masterminds/semver/v3"
 	nvidiacomv1beta1 "github.com/ai-dynamo/dynamo/deploy/operator/api/v1beta1"
@@ -30,6 +31,7 @@ import (
 	authenticationv1 "k8s.io/api/authentication/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	k8sptr "k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -427,6 +429,13 @@ func (v *dynamoGraphDeploymentValidation) validateKvTransferPolicy(
 
 	allErrs := field.ErrorList{}
 	namePath := fldPath.Child("clusterTopologyName")
+	if nameErrs := k8svalidation.IsDNS1123Subdomain(policy.ClusterTopologyName); len(nameErrs) > 0 {
+		allErrs = append(allErrs, field.Invalid(
+			namePath,
+			policy.ClusterTopologyName,
+			strings.Join(nameErrs, "; "),
+		))
+	}
 	if !grovePathway {
 		allErrs = append(allErrs, field.Forbidden(namePath, grovePathwayRequirement))
 	}
@@ -505,7 +514,7 @@ func (v *dynamoGraphDeploymentValidation) validateDynamoGraphDeploymentSpecUpdat
 		default:
 			detail = fmt.Sprintf("%s: components removed: %v", detail, removed)
 		}
-		allErrs = append(allErrs, field.Invalid(fldPath.Child("components"), newSpec.Components, detail))
+		allErrs = append(allErrs, field.Forbidden(fldPath.Child("components"), detail))
 	}
 
 	canModifyReplicas := v.userInfo != nil && internalwebhook.CanModifyDGDReplicas(v.operatorPrincipal, *v.userInfo)

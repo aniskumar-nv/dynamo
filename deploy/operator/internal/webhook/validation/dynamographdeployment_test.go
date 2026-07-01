@@ -379,19 +379,27 @@ func TestDynamoGraphDeploymentValidator_AnnotationMatrix(t *testing.T) {
 
 func TestDynamoGraphDeploymentValidator_ValidateAlphaCompatibility(t *testing.T) {
 	tests := []struct {
-		name    string
-		mutate  func(*nvidiacomv1alpha1.DynamoGraphDeployment)
-		wantErr string
+		name       string
+		mutate     func(*nvidiacomv1alpha1.DynamoGraphDeployment)
+		wantErr    string
+		wantFields []string
 	}{
 		{
-			name: "alpha PVC create requirements are owned by CEL",
+			name: "alpha PVC value requirements are preserved structurally",
 			mutate: func(dgd *nvidiacomv1alpha1.DynamoGraphDeployment) {
 				dgd.Spec.PVCs = []nvidiacomv1alpha1.PVC{
 					{
-						Name:   k8sptr.To("cache"),
+						Name:   k8sptr.To(""),
 						Create: k8sptr.To(true),
 					},
 				}
+			},
+			wantErr: "spec.pvcs[0].name: Required value: is required",
+			wantFields: []string{
+				"spec.pvcs[0].name",
+				"spec.pvcs[0].storageClass",
+				"spec.pvcs[0].size",
+				"spec.pvcs[0].volumeAccessMode",
 			},
 		},
 		{
@@ -481,7 +489,7 @@ func TestDynamoGraphDeploymentValidator_ValidateAlphaCompatibility(t *testing.T)
 			deployment := betaDGDFromAlpha(t, tt.mutate)
 			validator := newDynamoGraphDeploymentTestValidator(t, true)
 			_, err := validator.Validate(context.Background(), deployment)
-			assertBetaValidationError(t, err, tt.wantErr)
+			assertBetaValidationError(t, err, tt.wantErr, tt.wantFields...)
 		})
 	}
 }
@@ -522,20 +530,21 @@ func TestDynamoGraphDeploymentValidator_ValidateAlphaCompatibilityAdditionalEdge
 		assertBetaValidationError(t, err, "")
 	})
 
-	t.Run("alpha PVC name requirement is owned by the schema", func(t *testing.T) {
+	t.Run("alpha PVC name requirement is preserved structurally", func(t *testing.T) {
 		deployment := betaDGDFromAlpha(t, func(dgd *nvidiacomv1alpha1.DynamoGraphDeployment) {
 			dgd.Spec.PVCs = []nvidiacomv1alpha1.PVC{{}}
 		})
 
 		validator := newDynamoGraphDeploymentTestValidator(t, true)
 		_, err := validator.Validate(context.Background(), deployment)
-		assertBetaValidationError(t, err, "")
+		assertBetaValidationError(t, err, "spec.pvcs[0].name: Required value: is required")
 	})
 
-	t.Run("alpha PVC create constraints are owned by CEL", func(t *testing.T) {
+	t.Run("alpha PVC create value constraints are preserved structurally", func(t *testing.T) {
 		deployment := betaDGDFromAlpha(t, func(dgd *nvidiacomv1alpha1.DynamoGraphDeployment) {
 			dgd.Spec.PVCs = []nvidiacomv1alpha1.PVC{
 				{
+					Name:   k8sptr.To("cache"),
 					Create: k8sptr.To(true),
 				},
 			}
@@ -543,7 +552,14 @@ func TestDynamoGraphDeploymentValidator_ValidateAlphaCompatibilityAdditionalEdge
 
 		validator := newDynamoGraphDeploymentTestValidator(t, true)
 		_, err := validator.Validate(context.Background(), deployment)
-		assertBetaValidationError(t, err, "")
+		assertBetaValidationError(
+			t,
+			err,
+			"spec.pvcs[0].storageClass: Required value: is required when create is true",
+			"spec.pvcs[0].storageClass",
+			"spec.pvcs[0].size",
+			"spec.pvcs[0].volumeAccessMode",
+		)
 	})
 }
 
@@ -933,11 +949,12 @@ func TestDynamoGraphDeploymentValidator_KvTransferPolicyMatrix(t *testing.T) {
 			},
 		},
 		{
-			name: "cluster topology name format is owned by the schema",
+			name: "cluster topology name must be a DNS-1123 subdomain",
 			policy: &nvidiacomv1beta1.KvTransferPolicy{
 				ClusterTopologyName: "Bad_Name",
 				Domain:              "zone",
 			},
+			wantErr: `spec.experimental.kvTransferPolicy.clusterTopologyName: Invalid value: "Bad_Name"`,
 		},
 		{
 			name: "cluster topology name requires Grove pathway",
@@ -1196,6 +1213,7 @@ func TestDynamoGraphDeploymentValidator_ValidateUpdate(t *testing.T) {
 		wantErr    string
 		wantFields []string
 		wantWarns  bool
+		notWantErr string
 	}{
 		{
 			name:   "component topology is immutable",
@@ -1204,10 +1222,15 @@ func TestDynamoGraphDeploymentValidator_ValidateUpdate(t *testing.T) {
 				spec.Components = append(spec.Components, nvidiacomv1beta1.DynamoComponentDeploymentSharedSpec{
 					ComponentName: "extra",
 					Replicas:      k8sptr.To(int32(1)),
+					PodTemplate: &corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+						Name: consts.MainContainerName,
+						Env:  []corev1.EnvVar{{Name: "TOKEN", Value: "do-not-leak-this-value"}},
+					}}}},
 				})
 			}),
 			wantErr:    "component topology is immutable and cannot be modified after creation: components added: [extra]",
 			wantFields: []string{"spec.components"},
+			notWantErr: "do-not-leak-this-value",
 		},
 		{
 			name:   "component removal is immutable",
@@ -1547,6 +1570,9 @@ func TestDynamoGraphDeploymentValidator_ValidateUpdate(t *testing.T) {
 			validator := newDynamoGraphDeploymentTestValidator(t, true)
 			warnings, err := validator.ValidateUpdate(context.Background(), tt.oldDGD, tt.newDGD, tt.userInfo, tt.principal)
 			assertBetaValidationError(t, err, tt.wantErr, tt.wantFields...)
+			if tt.notWantErr != "" && err != nil && strings.Contains(err.Error(), tt.notWantErr) {
+				t.Fatalf("ValidateUpdate() error = %q, must not contain %q", err.Error(), tt.notWantErr)
+			}
 			if tt.wantWarns && len(warnings) == 0 {
 				t.Fatal("ValidateUpdate() expected warnings but got none")
 			}
