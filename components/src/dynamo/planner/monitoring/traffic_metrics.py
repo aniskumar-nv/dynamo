@@ -524,17 +524,18 @@ class PrometheusAPIClient:
 
         The pod-name regex matches the operator's pod-name format
         ``<dgd_name>-<replica-index>-<service-key-lowercase>-<hash>``
-        (e.g. ``qwen3-quickstart-0-vllmworker-86nvj``).  ``dgd_name`` is
-        regex-escaped before interpolation so a name containing regex
-        metacharacters can't widen the match to other DGDs or break the
-        query.
+        (e.g. ``qwen3-quickstart-0-vllmworker-86nvj``).  ``dgd_name`` needs
+        two escaping layers because it is a regex embedded in a PromQL quoted
+        string: ``re.escape`` for the regex layer (a DGD name may contain a
+        ``.``), then ``_quote_label_value`` to escape the resulting
+        backslashes for the surrounding PromQL string literal.
         """
-        dgd_name_re = re.escape(dgd_name)
+        pod_name_regex = f"^{re.escape(dgd_name)}-[0-9]+-.*"
         try:
             result = self.prom.custom_query(
                 f"sum(DCGM_FI_DEV_POWER_USAGE{{"
-                f'exported_namespace="{k8s_namespace}",'
-                f'exported_pod=~"^{dgd_name_re}-[0-9]+-.*"}})'
+                f'exported_namespace="{self._quote_label_value(k8s_namespace)}",'
+                f'exported_pod=~"{self._quote_label_value(pod_name_regex)}"}})'
             )
             if result:
                 value = float(result[0]["value"][1])

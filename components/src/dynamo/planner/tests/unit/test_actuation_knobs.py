@@ -17,6 +17,7 @@
             active_prefill_tokens_threshold  (θ_prefill_abs, absolute defense-in-depth)
 """
 
+import logging
 import os
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -28,7 +29,10 @@ from dynamo.planner.connectors.kubernetes import KubernetesConnector
 from dynamo.planner.core.base import NativePlannerBase
 from dynamo.planner.core.budget import POWER_ANNOTATION_KEY
 from dynamo.planner.core.types import PlannerEffects, ScalingDecision
-from dynamo.planner.errors import DynamoGraphDeploymentNotFoundError
+from dynamo.planner.errors import (
+    DynamoGraphDeploymentNotFoundError,
+    ModelNameNotFoundError,
+)
 
 pytestmark = [
     pytest.mark.gpu_0,
@@ -371,8 +375,6 @@ class TestApplyPowerAnnotations:
         self, connector, mock_kube_api, caplog
     ):
         """A Kubernetes PATCH failure must log a warning and let the tick continue."""
-        import logging
-
         pod = _mock_pod("worker-0")  # no annotation
         connector.get_component_pods = Mock(return_value=[pod])
         # Production narrows the catch to ApiException (core/base.py), so the
@@ -426,8 +428,6 @@ class TestApplyPowerAnnotations:
         error (5xx/timeout) on the DGD GET must instead log and skip so the
         next sweep can retry.
         """
-        import logging
-
         mock_kube_api.get_graph_deployment.side_effect = ApiException(
             status=503, reason="apiserver unavailable"
         )
@@ -455,8 +455,6 @@ class TestApplyPowerAnnotations:
     ):
         """A DynamoGraphDeploymentNotFoundError (PlannerError, e.g. 404 blip)
         on the DGD read must also be swallowed, not propagated."""
-        import logging
-
         mock_kube_api.get_graph_deployment.side_effect = (
             DynamoGraphDeploymentNotFoundError(
                 deployment_name="test-dgd", namespace="test-ns"
@@ -486,8 +484,6 @@ class TestApplyPowerAnnotations:
         read succeeds, but list_pods_by_label raises. The sweep must log and
         skip rather than tear down the planner.
         """
-        import logging
-
         mock_kube_api.get_graph_deployment.return_value = {
             "metadata": {"name": "test-dgd"},
             "spec": {
@@ -516,9 +512,10 @@ class TestApplyPowerAnnotations:
 
     @pytest.mark.asyncio
     async def test_unexpected_read_exception_propagates(self, connector, mock_kube_api):
-        """A non-(ApiException|PlannerError) read failure must NOT be swallowed —
-        the catch is intentionally narrow so unexpected reconciliation bugs
-        surface instead of silently no-op'ing every sweep."""
+        """A read failure outside (ApiException, DynamoGraphDeploymentNotFound)
+        must NOT be swallowed — the catch is intentionally narrow so unexpected
+        reconciliation bugs surface instead of silently no-op'ing every
+        sweep."""
         mock_kube_api.get_graph_deployment.side_effect = RuntimeError(
             "unexpected read bug"
         )
@@ -531,6 +528,27 @@ class TestApplyPowerAnnotations:
         )
 
         with pytest.raises(RuntimeError, match="unexpected read bug"):
+            await planner._apply_power_annotations()
+
+    @pytest.mark.asyncio
+    async def test_unexpected_planner_error_propagates(self, connector, mock_kube_api):
+        """A non-not-found PlannerError subclass must NOT be swallowed.
+
+        The catch is narrowed to DynamoGraphDeploymentNotFoundError, not the
+        PlannerError base — so a validation/model/component error (a real bug,
+        not a transient read failure) surfaces instead of being masked as a
+        skipped sweep.
+        """
+        mock_kube_api.get_graph_deployment.side_effect = ModelNameNotFoundError()
+
+        planner = _bare_planner(
+            connector,
+            _power_config(prefill_cap=300),
+            require_prefill=True,
+            require_decode=False,
+        )
+
+        with pytest.raises(ModelNameNotFoundError):
             await planner._apply_power_annotations()
 
     @pytest.mark.asyncio

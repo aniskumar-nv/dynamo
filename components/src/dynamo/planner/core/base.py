@@ -45,7 +45,7 @@ from dynamo.planner.core.types import (
     WorkerCapabilities,
     WorkerCounts,
 )
-from dynamo.planner.errors import PlannerError
+from dynamo.planner.errors import DynamoGraphDeploymentNotFoundError, PlannerError
 from dynamo.planner.monitoring.diagnostics_recorder import DiagnosticsRecorder
 from dynamo.planner.monitoring.live_dashboard import start_live_dashboard
 from dynamo.planner.monitoring.planner_metrics import PlannerPrometheusMetrics
@@ -883,12 +883,13 @@ class NativePlannerBase:
         #
         # The DGD read and pod listings hit the apiserver and can fail
         # transiently (ApiException — 5xx/timeout) or when the DGD is
-        # momentarily unresolvable (PlannerError, e.g.
-        # DynamoGraphDeploymentNotFoundError). This reconciliation sweep is
-        # optional and idempotent, so a failed read must not propagate: run()
-        # wraps the tick loop in try/finally, so an escaping exception would
-        # shut the engine down and exit the planner. Log and skip — the next
-        # sweep retries.
+        # momentarily unresolvable (DynamoGraphDeploymentNotFoundError — a
+        # 404 blip). This reconciliation sweep is optional and idempotent, so
+        # those must not propagate: run() wraps the tick loop in try/finally,
+        # so an escaping exception would shut the engine down and exit the
+        # planner. Log and skip — the next sweep retries. The catch stays
+        # narrow (not the PlannerError base) so unexpected planner errors —
+        # validation, component, model-mismatch — still surface as bugs.
         try:
             deployment = self.connector.kube_api.get_graph_deployment(
                 self.connector.graph_deployment_name
@@ -909,7 +910,7 @@ class NativePlannerBase:
                     pods_and_limits.append(
                         (pod, str(self.config.decode_engine_gpu_power_limit))
                     )
-        except (ApiException, PlannerError) as e:
+        except (ApiException, DynamoGraphDeploymentNotFoundError) as e:
             logger.warning(
                 "Power-annotation sweep skipped: failed to read DGD or list "
                 "worker pods (%s); retrying on the next sweep.",

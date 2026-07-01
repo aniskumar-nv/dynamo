@@ -668,19 +668,48 @@ class TestPowerAwareDcgmQueries:
                 k8s_namespace="kube-namespace", dgd_name="my-dgd"
             )
             assert result == pytest.approx(1234.5)
-            call_args = str(mock_query.call_args).replace("'", '"')
-            assert "DCGM_FI_DEV_POWER_USAGE" in call_args
+            # Assert on the raw query string (positional arg), not repr() —
+            # the escaped regex contains backslashes that repr would double.
+            query_str = mock_query.call_args[0][0]
+            assert "DCGM_FI_DEV_POWER_USAGE" in query_str
             # exported_namespace carries the K8s namespace, NOT the dynamo
             # logical namespace.  Bare `namespace` would label the DCGM
             # exporter pod itself (DCGM exporter runs in its own ns), so
             # using it would silently match nothing once attribution works.
-            assert 'exported_namespace="kube-namespace"' in call_args
+            assert 'exported_namespace="kube-namespace"' in query_str
             # exported_pod (not bare `pod`) is the workload pod label.
             # The operator emits `<dgd>-<replica-idx>-<service-key-lc>-<hash>`
-            # so the regex must accept the `-<digits>-` segment.
-            assert 'exported_pod=~"^my-dgd-[0-9]+-.*"' in call_args
+            # so the regex must accept the `-<digits>-` segment.  The hyphen
+            # in "my-dgd" is re.escape'd to `\-`, then the backslash is
+            # doubled by _quote_label_value for the PromQL string literal.
+            assert r'exported_pod=~"^my\\-dgd-[0-9]+-.*"' in query_str
             # The old broken regex must not appear.
-            assert "(prefill|decode|agg|frontend)" not in call_args
+            assert "(prefill|decode|agg|frontend)" not in query_str
+
+    def test_get_total_dgd_power_escapes_dgd_name_in_regex(self):
+        """dgd_name is a regex embedded in a PromQL quoted string, so it needs
+        two escaping layers: re.escape() for the regex, then the PromQL
+        string-literal escaping (_quote_label_value).
+
+        A dot in the name must be treated literally (a bare `.` would match any
+        character and could pull in another DGD's pods); a plain name must not
+        be over-escaped.
+        """
+        client = self._client()
+
+        # Name with a regex-significant dot.
+        with patch.object(client.prom, "custom_query") as mock_query:
+            mock_query.return_value = []
+            client.get_total_dgd_power(k8s_namespace="ns", dgd_name="my.dgd")
+            query_str = mock_query.call_args[0][0]
+            assert r'exported_pod=~"^my\\.dgd-[0-9]+-.*"' in query_str
+
+        # Plain alphanumeric name: escaping must be a no-op (no stray backslashes).
+        with patch.object(client.prom, "custom_query") as mock_query:
+            mock_query.return_value = []
+            client.get_total_dgd_power(k8s_namespace="ns", dgd_name="qwen3quickstart")
+            query_str = mock_query.call_args[0][0]
+            assert 'exported_pod=~"^qwen3quickstart-[0-9]+-.*"' in query_str
 
     def test_get_total_dgd_power_returns_none_on_empty(self):
         client = self._client()
