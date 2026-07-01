@@ -15,6 +15,7 @@
 
 import logging
 import math
+import re
 import typing
 from dataclasses import dataclass
 from typing import Dict, Optional
@@ -523,13 +524,17 @@ class PrometheusAPIClient:
 
         The pod-name regex matches the operator's pod-name format
         ``<dgd_name>-<replica-index>-<service-key-lowercase>-<hash>``
-        (e.g. ``qwen3-quickstart-0-vllmworker-86nvj``).
+        (e.g. ``qwen3-quickstart-0-vllmworker-86nvj``).  ``dgd_name`` is
+        regex-escaped before interpolation so a name containing regex
+        metacharacters can't widen the match to other DGDs or break the
+        query.
         """
+        dgd_name_re = re.escape(dgd_name)
         try:
             result = self.prom.custom_query(
                 f"sum(DCGM_FI_DEV_POWER_USAGE{{"
                 f'exported_namespace="{k8s_namespace}",'
-                f'exported_pod=~"^{dgd_name}-[0-9]+-.*"}})'
+                f'exported_pod=~"^{dgd_name_re}-[0-9]+-.*"}})'
             )
             if result:
                 value = float(result[0]["value"][1])

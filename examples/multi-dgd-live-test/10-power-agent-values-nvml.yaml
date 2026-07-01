@@ -48,12 +48,13 @@ tolerations:
     effect: NoSchedule
 
 rbac:
-  # FINDING (chart bug): with `namespaceRestricted: true`, the chart
-  # creates a namespace-scoped Role but does NOT pass `--namespace` to
-  # the agent. The agent then calls `list_pod_for_all_namespaces` and
-  # gets 403 Forbidden. Until the chart is fixed to wire
-  # `--namespace={{ .Release.Namespace }}` when namespaceRestricted=true,
-  # use cluster-scoped RBAC. See power_agent.py:798 (--namespace flag exists).
+  # Cluster-scoped RBAC for this test. The chart now correctly wires
+  # `--namespace=$(POD_NAMESPACE)` when `namespaceRestricted: true`
+  # (deploy/helm/charts/power-agent/templates/daemonset.yaml), so
+  # namespace-restricted mode is a valid alternative. Cluster-scoped is
+  # kept here so the single shared DaemonSet observes worker pods without
+  # re-templating per namespace — it is a deliberate choice, not a
+  # workaround for the old (now-fixed) missing-`--namespace` chart bug.
   namespaceRestricted: false
 
 daemonset:
@@ -66,14 +67,13 @@ daemonset:
 state:
   hostPath: /var/lib/dynamo-power-agent-test
 
-# FINDING (chart default too tight for live testing): the chart default
-# limits.memory of 128 MiB is enough for the agent's steady-state reconcile
-# loop but NOT enough when we run repeated `kubectl exec -- python -c "..."`
-# probes alongside it — importing the kubernetes client library inside the
-# pod pushed the cgroup over the limit twice on 2026-05-21 and the kernel
-# OOM-killed the agent (lastState.terminated.reason=OOMKilled). Bumping
-# memory for the test pass; the chart's `values.yaml` default should likely
-# also be raised, but that's a separate PR-feedback finding.
+# The chart default limits.memory is now 256Mi (deploy/helm/charts/
+# power-agent/values.yaml), which matches what we set here. We keep an
+# explicit block because this live test runs repeated
+# `kubectl exec -- python -c "..."` probes alongside the agent: importing
+# the kubernetes client library inside the pod OOM-killed the agent at the
+# old 128Mi default on 2026-05-21 (lastState.terminated.reason=OOMKilled).
+# 256Mi gives headroom for those probes.
 resources:
   requests:
     cpu: 50m

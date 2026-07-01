@@ -880,25 +880,42 @@ class NativePlannerBase:
         # One DGD read for the whole sweep: resolving prefill and decode pods
         # each needs the deployment, so fetch it once and reuse it rather than
         # letting each get_component_pods() issue its own GET.
-        deployment = self.connector.kube_api.get_graph_deployment(
-            self.connector.graph_deployment_name
-        )
+        #
+        # The DGD read and pod listings hit the apiserver and can fail
+        # transiently (ApiException — 5xx/timeout) or when the DGD is
+        # momentarily unresolvable (PlannerError, e.g.
+        # DynamoGraphDeploymentNotFoundError). This reconciliation sweep is
+        # optional and idempotent, so a failed read must not propagate: run()
+        # wraps the tick loop in try/finally, so an escaping exception would
+        # shut the engine down and exit the planner. Log and skip — the next
+        # sweep retries.
+        try:
+            deployment = self.connector.kube_api.get_graph_deployment(
+                self.connector.graph_deployment_name
+            )
 
-        pods_and_limits: list[tuple] = []
-        if self.require_prefill:
-            for pod in self.connector.get_component_pods(
-                SubComponentType.PREFILL, deployment=deployment
-            ):
-                pods_and_limits.append(
-                    (pod, str(self.config.prefill_engine_gpu_power_limit))
-                )
-        if self.require_decode:
-            for pod in self.connector.get_component_pods(
-                SubComponentType.DECODE, deployment=deployment
-            ):
-                pods_and_limits.append(
-                    (pod, str(self.config.decode_engine_gpu_power_limit))
-                )
+            pods_and_limits: list[tuple] = []
+            if self.require_prefill:
+                for pod in self.connector.get_component_pods(
+                    SubComponentType.PREFILL, deployment=deployment
+                ):
+                    pods_and_limits.append(
+                        (pod, str(self.config.prefill_engine_gpu_power_limit))
+                    )
+            if self.require_decode:
+                for pod in self.connector.get_component_pods(
+                    SubComponentType.DECODE, deployment=deployment
+                ):
+                    pods_and_limits.append(
+                        (pod, str(self.config.decode_engine_gpu_power_limit))
+                    )
+        except (ApiException, PlannerError) as e:
+            logger.warning(
+                "Power-annotation sweep skipped: failed to read DGD or list "
+                "worker pods (%s); retrying on the next sweep.",
+                e,
+            )
+            return
 
         for pod, limit_str in pods_and_limits:
             current = (pod.metadata.annotations or {}).get(POWER_ANNOTATION_KEY)

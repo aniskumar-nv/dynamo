@@ -61,7 +61,8 @@ tolerations:
 
 rbac:
   # See 10-power-agent-values-nvml.yaml for the namespaceRestricted=false
-  # rationale (chart bug — agent needs --namespace flag when restricted).
+  # rationale (cluster-scoped for the shared DaemonSet; the chart now wires
+  # `--namespace` correctly when restricted, so this is a deliberate choice).
   namespaceRestricted: false
 
 daemonset:
@@ -74,8 +75,9 @@ daemonset:
 state:
   hostPath: /var/lib/dynamo-power-agent-test
 
-# See 10-power-agent-values-nvml.yaml — the chart's 128 MiB default is too
-# tight for live testing with repeated `kubectl exec -- python` probes.
+# See 10-power-agent-values-nvml.yaml — 256Mi (now also the chart default)
+# gives headroom for live testing with repeated `kubectl exec -- python`
+# probes.
 resources:
   requests:
     cpu: 50m

@@ -28,6 +28,7 @@ from dynamo.planner.connectors.kubernetes import KubernetesConnector
 from dynamo.planner.core.base import NativePlannerBase
 from dynamo.planner.core.budget import POWER_ANNOTATION_KEY
 from dynamo.planner.core.types import PlannerEffects, ScalingDecision
+from dynamo.planner.errors import DynamoGraphDeploymentNotFoundError
 
 pytestmark = [
     pytest.mark.gpu_0,
@@ -412,6 +413,124 @@ class TestApplyPowerAnnotations:
         )
 
         with pytest.raises(RuntimeError, match="unexpected bug"):
+            await planner._apply_power_annotations()
+
+    @pytest.mark.asyncio
+    async def test_sweep_skipped_when_dgd_read_fails(
+        self, connector, mock_kube_api, caplog
+    ):
+        """A transient DGD-read ApiException must be swallowed, not propagated.
+
+        The sweep runs inside run()'s try/finally loop; an escaping exception
+        would shut the engine down and exit the planner. A transient apiserver
+        error (5xx/timeout) on the DGD GET must instead log and skip so the
+        next sweep can retry.
+        """
+        import logging
+
+        mock_kube_api.get_graph_deployment.side_effect = ApiException(
+            status=503, reason="apiserver unavailable"
+        )
+        connector.get_component_pods = Mock()
+
+        planner = _bare_planner(
+            connector,
+            _power_config(prefill_cap=300),
+            require_prefill=True,
+            require_decode=True,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            # Must not raise
+            await planner._apply_power_annotations()
+
+        # Bailed before touching pods; nothing patched.
+        connector.get_component_pods.assert_not_called()
+        mock_kube_api.patch_pod_annotation.assert_not_called()
+        assert any("sweep skipped" in r.message.lower() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_sweep_skipped_when_dgd_not_found(
+        self, connector, mock_kube_api, caplog
+    ):
+        """A DynamoGraphDeploymentNotFoundError (PlannerError, e.g. 404 blip)
+        on the DGD read must also be swallowed, not propagated."""
+        import logging
+
+        mock_kube_api.get_graph_deployment.side_effect = (
+            DynamoGraphDeploymentNotFoundError(
+                deployment_name="test-dgd", namespace="test-ns"
+            )
+        )
+
+        planner = _bare_planner(
+            connector,
+            _power_config(prefill_cap=300),
+            require_prefill=True,
+            require_decode=False,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            await planner._apply_power_annotations()
+
+        mock_kube_api.patch_pod_annotation.assert_not_called()
+        assert any("sweep skipped" in r.message.lower() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_sweep_skipped_when_pod_listing_fails(
+        self, connector, mock_kube_api, caplog
+    ):
+        """A transient pod-listing ApiException must be swallowed, not propagated.
+
+        Exercises the real KubernetesConnector.get_component_pods path: the DGD
+        read succeeds, but list_pods_by_label raises. The sweep must log and
+        skip rather than tear down the planner.
+        """
+        import logging
+
+        mock_kube_api.get_graph_deployment.return_value = {
+            "metadata": {"name": "test-dgd"},
+            "spec": {
+                "components": [
+                    {"name": "VllmPrefillWorker", "type": "prefill"},
+                ]
+            },
+        }
+        mock_kube_api.list_pods_by_label.side_effect = ApiException(
+            status=503, reason="apiserver unavailable"
+        )
+
+        planner = _bare_planner(
+            connector,
+            _power_config(prefill_cap=300),
+            require_prefill=True,
+            require_decode=False,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            # Must not raise
+            await planner._apply_power_annotations()
+
+        mock_kube_api.patch_pod_annotation.assert_not_called()
+        assert any("sweep skipped" in r.message.lower() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_unexpected_read_exception_propagates(self, connector, mock_kube_api):
+        """A non-(ApiException|PlannerError) read failure must NOT be swallowed —
+        the catch is intentionally narrow so unexpected reconciliation bugs
+        surface instead of silently no-op'ing every sweep."""
+        mock_kube_api.get_graph_deployment.side_effect = RuntimeError(
+            "unexpected read bug"
+        )
+
+        planner = _bare_planner(
+            connector,
+            _power_config(prefill_cap=300),
+            require_prefill=True,
+            require_decode=False,
+        )
+
+        with pytest.raises(RuntimeError, match="unexpected read bug"):
             await planner._apply_power_annotations()
 
     @pytest.mark.asyncio
