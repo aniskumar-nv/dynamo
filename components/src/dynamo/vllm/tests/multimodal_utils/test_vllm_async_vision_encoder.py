@@ -180,7 +180,12 @@ async def test_passthrough_skips_preprocess_when_no_pool():
         def preprocess(self, raw):
             raise AssertionError("preprocess must not run in passthrough mode")
 
+        def forward_batch(self, items, target_bucket=None):
+            self.received.append(list(items))
+            return super().forward_batch(items, target_bucket)
+
     be = _PassthroughBackend()
+    be.received = []
     enc = AsyncVisionEncoder(be)
     enc.load("m")
     try:
@@ -188,6 +193,10 @@ async def test_passthrough_skips_preprocess_when_no_pool():
         out = await enc.encode(["a", "bb"])
         assert len(out) == 2
         assert all(t.shape == (2, 4) for t in out)
+        # Passthrough must hand the raws themselves to forward_batch, unchanged
+        # and in order — count+shape alone would pass with substituted/reordered
+        # inputs.
+        assert be.received == [["a", "bb"]]
     finally:
         enc.shutdown()
 
